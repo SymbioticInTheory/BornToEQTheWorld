@@ -38,18 +38,18 @@ def poly_mask(polys):
 top, mid, base = 400, 575, 770
 strokes = [
     # B
-    ([(150, top - 20), (150, base)], 74, False),
-    ([(150, top), (330, top), (375, 455), (330, mid), (150, mid)], 58, False),
-    ([(150, mid), (345, mid), (400, 650), (350, base), (150, base)], 58, False),
+    ([(150, top - 20), (150, base)], 84, False),
+    ([(150, top), (310, top), (352, 455), (310, mid), (150, mid)], 66, False),
+    ([(150, mid), (325, mid), (372, 650), (330, base), (150, base)], 66, False),
     # E (tall stem: the scythe handle)
-    ([(470, 215), (470, base)], 74, False),
-    ([(470, top), (655, top)], 56, False),
-    ([(470, mid), (615, mid)], 56, False),
-    ([(470, base), (665, base)], 56, False),
+    ([(470, 215), (470, base)], 84, False),
+    ([(470, top), (655, top)], 64, False),
+    ([(470, mid), (615, mid)], 64, False),
+    ([(470, base), (665, base)], 64, False),
     # Q
-    ([(720, top), (880, top), (910, 455), (910, 705), (875, base), (745, base), (710, 705), (710, 455)], 58, True),
-    ([(895, top), (895, 318)], 60, False),
-    ([(800, 655), (950, 845)], 52, False),
+    ([(720, top), (880, top), (910, 455), (910, 705), (875, base), (745, base), (710, 705), (710, 455)], 66, True),
+    ([(895, top), (895, 318)], 70, False),
+    ([(800, 655), (950, 845)], 60, False),
 ]
 spikes = [  # serif spikes pointing down/out
     [(113, base + 30), (187, base + 30), (150, base + 95)],
@@ -61,27 +61,36 @@ spikes = [  # serif spikes pointing down/out
     [(690, base + 10), (760, base + 30), (712, base + 90)],
 ]
 spikes += [
-    [(330, top - 29), (395, top - 29), (395, top - 85)],   # B top right
+    [(310, top - 29), (372, top - 29), (372, top - 85)],   # B top right
     [(700, top - 29), (760, top - 29), (690, top - 80)],   # Q top left
     [(910, mid), (945, mid - 40), (945, mid + 50)],        # Q right barb
 ]
 letters = stroke_mask(strokes) | poly_mask(spikes)
 
-# Drips hanging from the bottoms.
-random.seed(7)
+# Blood: black drips of uneven length with teardrop ends, some with a loose drop.
+random.seed(11)
 drip = Image.new('L', (S, S), 0)
 dd = ImageDraw.Draw(drip)
-for x0, x1 in [(120, 380), (440, 660), (720, 880)]:
+
+def drips_along(x0, x1, y, density=(16, 34), length=(18, 120)):
     x = x0
     while x < x1:
-        w = random.randint(14, 22)
-        L = random.randint(30, 110)
-        y = base + 20
-        dd.rectangle([x, y, x + w, y + L], fill=255)
-        dd.ellipse([x - 3, y + L - w // 2, x + w + 3, y + L + w // 2 + 4], fill=255)
-        x += w + random.randint(22, 44)
+        w = random.randint(9, 17)
+        L = random.randint(*length)
+        dd.rectangle([x, y - 10, x + w, y + L], fill=255)
+        r = w // 2 + random.randint(2, 5)
+        cx = x + w / 2
+        dd.ellipse([cx - r, y + L - r, cx + r, y + L + r + 4], fill=255)
+        if random.random() < 0.3:
+            d = random.randint(10, 24)
+            rr = random.randint(4, 7)
+            dd.ellipse([cx - rr, y + L + r + d, cx + rr, y + L + r + d + rr * 2 + 3], fill=255)
+        x += w + random.randint(*density)
+
+drips_along(115, 410, base + 32)
+drips_along(440, 690, base + 32)
+drips_along(700, 905, base + 32)
 drips = np.array(drip) > 0
-letters = letters | drips
 
 # --- Scythe blade and hooded skull, cut from the supplied logo ---------------
 src = Image.open(src_path).convert('RGB')
@@ -121,19 +130,21 @@ def paste(mask, box, scale, dest_xy, flip=False):
 blade = paste(blade_m, (140, 170, 495, 335), 1.25, (33, 161))
 hood = paste(hood_m, (628, 125, 795, 336), 1.4, (780, 36))
 
-# Black outline + inner line around the letters, then red.
-outline = ndimage.binary_dilation(letters | drips, disk(13))
-inner = letters & ~ndimage.binary_erosion(letters, disk(14)) & ndimage.binary_erosion(letters, disk(9))
+# Death-style letters: black body, a red band just inside the edge, black core.
+body = ndimage.binary_dilation(letters, disk(10))
+red_band = ndimage.binary_erosion(letters, disk(4)) & ~ndimage.binary_erosion(letters, disk(17))
 
-shape_all = outline | (blade[..., 3] > 40) | (hood[..., 3] > 40)
-sticker = ndimage.binary_dilation(shape_all, disk(22))
+blade_a = blade[..., 3] > 60
+hood_a = hood[..., 3] > 60
+pieces = blade_a | hood_a
+# One black outline around everything so the cut pieces join the letters.
+outline = ndimage.binary_dilation(body | drips | pieces, disk(5))
+sticker = ndimage.binary_dilation(outline, disk(20))
 
-img = Image.new('RGBA', (S, S), (0, 0, 0, 0))
-a = np.array(img)
+a = np.zeros((S, S, 4), dtype=np.uint8)
 a[sticker] = (245, 243, 240, 255)
-a[outline] = (10, 10, 10, 255)
-a[letters] = (*RED, 255)
-a[inner] = (10, 10, 10, 255)
+a[outline] = (8, 8, 8, 255)
+a[red_band] = (*RED, 255)
 img = Image.fromarray(a, 'RGBA')
 for layer in (blade, hood):
     img.alpha_composite(Image.fromarray(layer, 'RGBA'))
