@@ -15,6 +15,22 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install numpy scipy
-      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBTEQ_BUILD_PLUGIN=OFF
       - run: cmake --build build --config Release
       - run: ctest --test-dir build -C Release --output-on-failure
+
+  windows-plugin:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: cmake -B build -DBTEQ_BUILD_TESTS=OFF
+      - run: cmake --build build --config Release --target BornToEQTheWorld_VST3 BornToEQTheWorld_Standalone --parallel
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BornToEQTheWorld-Windows
+          path: |
+            build/BornToEQTheWorld_artefacts/Release/VST3/
+            build/BornToEQTheWorld_artefacts/Release/Standalone/*.exe

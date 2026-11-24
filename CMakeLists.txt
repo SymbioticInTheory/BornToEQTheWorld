@@ -1,20 +1,103 @@
 cmake_minimum_required(VERSION 3.22)
-project(BornToEQTheWorld VERSION 0.1.0 LANGUAGES CXX)
+project(BornToEQTheWorld VERSION 0.1.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# DSP core is header-only (src/dsp) so it builds and tests without JUCE.
-add_executable(render_impulse tests/render_impulse.cpp)
+option(BTEQ_BUILD_TESTS "Build the DSP and library tests" ON)
+option(BTEQ_BUILD_PLUGIN "Build the JUCE plugin (VST3 + standalone)" ON)
 
-enable_testing()
 find_package(Python3 COMPONENTS Interpreter)
-if(Python3_FOUND)
-  add_test(NAME dsp_matches_autoeq
-           COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/compare_with_autoeq.py
-                   $<TARGET_FILE:render_impulse>
-                   "${CMAKE_SOURCE_DIR}/presets/sample/Sennheiser HD 650 ParametricEQ.txt")
+
+# ---------------------------------------------------------------------------
+# Tests. The DSP core (src/dsp) is header-only and builds without JUCE.
+# ---------------------------------------------------------------------------
+if(BTEQ_BUILD_TESTS)
+  enable_testing()
+  add_executable(render_impulse tests/render_impulse.cpp)
+  add_executable(render_graphic tests/render_graphic.cpp)
+  add_executable(test_library tests/test_library.cpp)
+  add_test(NAME headphone_library
+           COMMAND test_library ${CMAKE_SOURCE_DIR}/data/headphones.tsv ${CMAKE_SOURCE_DIR}/presets/sample)
+  if(Python3_FOUND)
+    add_test(NAME dsp_matches_autoeq
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/compare_with_autoeq.py
+                     $<TARGET_FILE:render_impulse>
+                     "${CMAKE_SOURCE_DIR}/presets/sample/Sennheiser HD 650 ParametricEQ.txt")
+    add_test(NAME graphic_eq_fir
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/compare_graphic.py
+                     $<TARGET_FILE:render_graphic>
+                     "${CMAKE_SOURCE_DIR}/presets/sample/Sennheiser HD 650 GraphicEQ.txt")
+  endif()
 endif()
 
-add_executable(test_library tests/test_library.cpp)
-add_test(NAME headphone_library
-         COMMAND test_library ${CMAKE_SOURCE_DIR}/data/headphones.tsv ${CMAKE_SOURCE_DIR}/presets/sample)
+# ---------------------------------------------------------------------------
+# Plugin
+# ---------------------------------------------------------------------------
+if(BTEQ_BUILD_PLUGIN)
+  if(NOT Python3_FOUND)
+    message(FATAL_ERROR "Python 3 is needed to pack the headphone library into the plugin")
+  endif()
+
+  include(FetchContent)
+  FetchContent_Declare(JUCE
+    GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
+    GIT_TAG 8.0.15
+    GIT_SHALLOW TRUE)
+  FetchContent_MakeAvailable(JUCE)
+
+  # The library is embedded gzip-compressed (about 22 MB -> 5 MB).
+  set(BTEQ_LIBRARY_GZ ${CMAKE_BINARY_DIR}/headphones.tsv.gz)
+  add_custom_command(
+    OUTPUT ${BTEQ_LIBRARY_GZ}
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/gzip_file.py
+      ${CMAKE_SOURCE_DIR}/data/headphones.tsv ${BTEQ_LIBRARY_GZ}
+    DEPENDS ${CMAKE_SOURCE_DIR}/data/headphones.tsv ${CMAKE_SOURCE_DIR}/tools/gzip_file.py
+    COMMENT "Compressing headphone library")
+  add_custom_target(bteq_library_gz DEPENDS ${BTEQ_LIBRARY_GZ})
+
+  juce_add_binary_data(BteqData
+    SOURCES
+      ${BTEQ_LIBRARY_GZ}
+      resources/forest.png
+      resources/fonts/PirataOne-Regular.ttf
+      resources/fonts/BarlowCondensed-SemiBold.ttf
+      resources/fonts/BarlowCondensed-Bold.ttf
+      resources/fonts/Barlow-Regular.ttf
+      resources/fonts/Barlow-SemiBold.ttf)
+  add_dependencies(BteqData bteq_library_gz)
+
+  juce_add_plugin(BornToEQTheWorld
+    COMPANY_NAME "SymbioticInTheory"
+    PRODUCT_NAME "Born To EQ The World"
+    PLUGIN_MANUFACTURER_CODE Symb
+    PLUGIN_CODE Bteq
+    FORMATS VST3 Standalone
+    IS_SYNTH FALSE
+    NEEDS_MIDI_INPUT FALSE
+    NEEDS_MIDI_OUTPUT FALSE
+    IS_MIDI_EFFECT FALSE
+    EDITOR_WANTS_KEYBOARD_FOCUS TRUE
+    COPY_PLUGIN_AFTER_BUILD FALSE
+    VST3_CATEGORIES Fx EQ)
+
+  target_sources(BornToEQTheWorld PRIVATE
+    src/plugin/PluginProcessor.cpp
+    src/plugin/PluginEditor.cpp)
+  target_include_directories(BornToEQTheWorld PRIVATE src)
+
+  target_compile_definitions(BornToEQTheWorld PUBLIC
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_VST3_CAN_REPLACE_VST2=0
+    JUCE_DISPLAY_SPLASH_SCREEN=0)
+
+  target_link_libraries(BornToEQTheWorld
+    PRIVATE
+      BteqData
+      juce::juce_audio_utils
+      juce::juce_dsp
+    PUBLIC
+      juce::juce_recommended_config_flags
+      juce::juce_recommended_lto_flags
+      juce::juce_recommended_warning_flags)
+endif()
