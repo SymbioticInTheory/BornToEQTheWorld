@@ -1,0 +1,592 @@
+#include "PluginEditor.h"
+
+#include <BinaryData.h>
+
+// ===========================================================================
+// Theme
+// ===========================================================================
+Theme::Theme() {
+    using juce::Typeface;
+    blackletter = Typeface::createSystemTypefaceFor(BinaryData::PirataOneRegular_ttf, BinaryData::PirataOneRegular_ttfSize);
+    condSemi = Typeface::createSystemTypefaceFor(BinaryData::BarlowCondensedSemiBold_ttf,
+                                                 BinaryData::BarlowCondensedSemiBold_ttfSize);
+    condBold = Typeface::createSystemTypefaceFor(BinaryData::BarlowCondensedBold_ttf, BinaryData::BarlowCondensedBold_ttfSize);
+    body = Typeface::createSystemTypefaceFor(BinaryData::BarlowRegular_ttf, BinaryData::BarlowRegular_ttfSize);
+    bodySemi = Typeface::createSystemTypefaceFor(BinaryData::BarlowSemiBold_ttf, BinaryData::BarlowSemiBold_ttfSize);
+}
+
+juce::Colour Theme::accent(int index) {
+    static const juce::uint32 colours[numAccents] = { 0xffE46A2E, 0xffC42B2B, 0xffD9D5CD, 0xff8FA3B0 };
+    return juce::Colour(colours[juce::jlimit(0, numAccents - 1, index)]);
+}
+
+juce::String Theme::accentName(int index) {
+    static const char* names[numAccents] = { "Ember", "Blood red", "Bone", "Steel blue" };
+    return names[juce::jlimit(0, numAccents - 1, index)];
+}
+
+namespace {
+// Layout of the 1080 x 680 window (matches the agreed mockup).
+const juce::Rectangle<int> kHeadphonePanel { 18, 90, 312, 254 }, kTargetPanel { 18, 358, 312, 304 },
+    kTabsPanel { 346, 90, 276, 48 }, kGraphPanel { 346, 150, 716, 290 }, kFiltersPanel { 346, 452, 466, 210 },
+    kCorrectionPanel { 826, 452, 236, 210 };
+
+void drawPanel(juce::Graphics& g, juce::Rectangle<int> r) {
+    g.setColour(Theme::panel);
+    g.fillRoundedRectangle(r.toFloat(), 10.0f);
+    g.setColour(Theme::panelBorder);
+    g.drawRoundedRectangle(r.toFloat().reduced(0.5f), 10.0f, 1.0f);
+}
+
+juce::String formatFreq(double f) {
+    return f >= 1000 ? juce::String(f / 1000.0, f >= 10000 ? 1 : 2).trimCharactersAtEnd("0").trimCharactersAtEnd(".") + " kHz"
+                     : juce::String((int)std::round(f)) + " Hz";
+}
+
+juce::String formatDb(double db) { return (db > 0.05 ? "+" : "") + juce::String(db, 1) + " dB"; }
+} // namespace
+
+// ===========================================================================
+// Look and feel
+// ===========================================================================
+BteqLookAndFeel::BteqLookAndFeel(const Theme& t) : accentColour(Theme::accent(0)), theme(t) {
+    setColour(juce::TextEditor::textColourId, Theme::text);
+    setColour(juce::TextEditor::highlightColourId, Theme::selected);
+    setColour(juce::CaretComponent::caretColourId, Theme::textBright);
+    setColour(juce::ListBox::backgroundColourId, juce::Colours::transparentBlack);
+    setColour(juce::ListBox::outlineColourId, juce::Colours::transparentBlack);
+}
+
+void BteqLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, const juce::Colour&, bool over, bool) {
+    const auto kind = b.getProperties()["kind"].toString();
+    auto r = b.getLocalBounds().toFloat();
+    if (kind == "swatch") {
+        const auto c = juce::Colour((juce::uint32)(juce::int64)b.getProperties()["swatch"]);
+        if (b.getToggleState()) {
+            g.setColour(Theme::textBright);
+            g.drawEllipse(r.reduced(1.0f), 2.0f);
+        }
+        g.setColour(c);
+        g.fillEllipse(r.reduced(6.0f));
+        return;
+    }
+    if (kind == "tab") {
+        if (b.getToggleState()) {
+            g.setColour(Theme::text);
+            g.fillRoundedRectangle(r, 7.0f);
+        } else if (over && b.isEnabled()) {
+            g.setColour(Theme::selected);
+            g.fillRoundedRectangle(r, 7.0f);
+        }
+        return;
+    }
+    // Bypass and anything else.
+    const bool on = b.getToggleState();
+    g.setColour(on ? juce::Colour(0xb3781e18) : Theme::panel);
+    g.fillRoundedRectangle(r, 8.0f);
+    g.setColour(on ? juce::Colour(0xff8A3226) : juce::Colour(0x29ffffff));
+    g.drawRoundedRectangle(r.reduced(0.5f), 8.0f, 1.0f);
+}
+
+void BteqLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& b, bool, bool) {
+    const auto kind = b.getProperties()["kind"].toString();
+    if (kind == "swatch") return;
+    juce::Colour c = Theme::text;
+    if (kind == "tab") c = b.getToggleState() ? juce::Colour(0xff0B0C0D) : Theme::soft;
+    if (kind == "bypass" && b.getToggleState()) c = juce::Colour(0xffFFB5A6);
+    if (!b.isEnabled()) c = c.withAlpha(0.35f);
+    g.setColour(c);
+    g.setFont(theme.labelFont(17.0f));
+    g.drawText(b.getButtonText().toUpperCase(), b.getLocalBounds(), juce::Justification::centred);
+}
+
+void BteqLookAndFeel::drawLinearSlider(juce::Graphics& g, int x, int y, int w, int h, float pos, float, float,
+                                       juce::Slider::SliderStyle, juce::Slider&) {
+    const float cy = (float)y + (float)h * 0.5f;
+    const juce::Rectangle<float> track((float)x, cy - 3.0f, (float)w, 6.0f);
+    g.setColour(juce::Colour(0x29ffffff));
+    g.fillRoundedRectangle(track, 3.0f);
+    g.setColour(accentColour);
+    g.fillRoundedRectangle(track.withRight(pos), 3.0f);
+    const juce::Rectangle<float> thumb(pos - 11.0f, cy - 11.0f, 22.0f, 22.0f);
+    g.setColour(juce::Colour(0xffD9D5CD));
+    g.fillEllipse(thumb);
+    g.setColour(accentColour);
+    g.drawEllipse(thumb.reduced(1.5f), 3.0f);
+}
+
+void BteqLookAndFeel::fillTextEditorBackground(juce::Graphics& g, int w, int h, juce::TextEditor&) {
+    g.setColour(Theme::field);
+    g.fillRoundedRectangle(0.0f, 0.0f, (float)w, (float)h, 8.0f);
+}
+
+void BteqLookAndFeel::drawTextEditorOutline(juce::Graphics& g, int w, int h, juce::TextEditor& e) {
+    g.setColour(e.hasKeyboardFocus(true) ? Theme::text : juce::Colour(0x29ffffff));
+    g.drawRoundedRectangle(0.5f, 0.5f, (float)w - 1.0f, (float)h - 1.0f, 8.0f, 1.0f);
+}
+
+void BteqLookAndFeel::drawScrollbar(juce::Graphics& g, juce::ScrollBar&, int x, int y, int w, int h, bool vertical,
+                                    int thumbStart, int thumbSize, bool over, bool) {
+    if (thumbSize <= 0) return;
+    juce::Rectangle<float> r = vertical ? juce::Rectangle<float>((float)x + (float)w - 5.0f, (float)thumbStart, 4.0f, (float)thumbSize)
+                                        : juce::Rectangle<float>((float)thumbStart, (float)y + (float)h - 5.0f, (float)thumbSize, 4.0f);
+    g.setColour(juce::Colour(over ? 0x55ffffff : 0x33ffffff));
+    g.fillRoundedRectangle(r, 2.0f);
+}
+
+// ===========================================================================
+// Response graph
+// ===========================================================================
+juce::Rectangle<float> ResponseGraph::plotArea() const { return getLocalBounds().toFloat().withTrimmedLeft(34).withTrimmedBottom(22).withTrimmedTop(6).withTrimmedRight(6); }
+
+float ResponseGraph::xOf(double f) const {
+    const auto a = plotArea();
+    return a.getX() + (float)(std::log10(f / 20.0) / 3.0) * a.getWidth();
+}
+
+float ResponseGraph::yOf(double db) const {
+    const auto a = plotArea();
+    const double clamped = juce::jlimit(-13.0, 13.0, db);
+    return a.getCentreY() - (float)(clamped / 12.0) * a.getHeight() * 0.5f;
+}
+
+void ResponseGraph::paint(juce::Graphics& g) {
+    const auto a = plotArea();
+    // Grid.
+    g.setColour(Theme::grid);
+    for (double db : { -12.0, -6.0, 6.0, 12.0 }) g.drawHorizontalLine((int)yOf(db), a.getX(), a.getRight());
+    for (double f : { 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0 }) g.drawVerticalLine((int)xOf(f), a.getY(), a.getBottom());
+    g.setColour(juce::Colour(0x33ffffff));
+    g.drawHorizontalLine((int)yOf(0), a.getX(), a.getRight());
+
+    g.setFont(theme.condFont(13.0f));
+    g.setColour(Theme::muted);
+    for (double db : { -12.0, -6.0, 0.0, 6.0, 12.0 })
+        g.drawText((db > 0 ? "+" : "") + juce::String((int)db), juce::Rectangle<float>(0, yOf(db) - 8, a.getX() - 8, 16),
+                   juce::Justification::centredRight);
+    const std::pair<double, const char*> ticks[] = { { 20, "20" }, { 50, "50" }, { 100, "100" }, { 200, "200" }, { 500, "500" },
+                                                     { 1000, "1k" }, { 2000, "2k" }, { 5000, "5k" }, { 10000, "10k" }, { 20000, "20k" } };
+    for (const auto& t : ticks)
+        g.drawText(t.second, juce::Rectangle<float>(xOf(t.first) - 20, a.getBottom() + 4, 40, 16), juce::Justification::centred);
+
+    const auto* p = proc.selectedProfile();
+    const double k = proc.amount();
+    const juce::Colour curveColour = proc.params.getRawParameterValue("bypass")->load() > 0.5f ? juce::Colour(0xff6E7178) : accent;
+    if (p == nullptr) {
+        g.setColour(curveColour);
+        g.drawLine(a.getX(), yOf(0), a.getRight(), yOf(0), 3.0f);
+        g.setColour(Theme::soft);
+        g.setFont(theme.bodyFont(15.0f));
+        g.drawText("Search for your headphones to start", a.withTrimmedTop(a.getHeight() * 0.25f).withHeight(24),
+                   juce::Justification::centred);
+        return;
+    }
+
+    juce::Path curve;
+    const int points = 300;
+    if (proc.graphicModeActive()) {
+        const auto& freqs = proc.library().graphicFrequencies();
+        const std::vector<double> raw(p->graphicGainsDb.begin(), p->graphicGainsDb.end());
+        const auto gains = bteq::scaleGraphicGains(raw, k);
+        const double offset = p->hasParametric ? -p->parametric.preampDb * k : 0.0; // show it like the parametric curve
+        for (size_t i = 0; i < freqs.size(); i += 4) {
+            g.setColour(curveColour.withAlpha(0.35f));
+            g.drawLine(xOf(freqs[i]), yOf(0), xOf(freqs[i]), yOf(gains[i] + offset), 5.0f);
+        }
+        for (int i = 0; i <= points; ++i) {
+            const double f = 20.0 * std::pow(1000.0, i / (double)points);
+            const float x = xOf(f), y = yOf(bteq::graphicGainAt(freqs, gains, f) + offset);
+            i == 0 ? curve.startNewSubPath(x, y) : curve.lineTo(x, y);
+        }
+        g.setColour(curveColour);
+        g.strokePath(curve, juce::PathStrokeType(3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        return;
+    }
+
+    std::vector<bteq::BiquadCoeffs> coeffs;
+    for (const auto& f : p->parametric.filters)
+        if (f.enabled) coeffs.push_back(bteq::BiquadCoeffs::make(f.type, f.fc, f.gainDb * k, f.q, 48000.0));
+    for (int i = 0; i <= points; ++i) {
+        const double f = 20.0 * std::pow(1000.0, i / (double)points);
+        double db = 0;
+        for (const auto& c : coeffs) db += c.magnitudeDb(f, 48000.0);
+        const float x = xOf(f), y = yOf(db);
+        i == 0 ? curve.startNewSubPath(x, y) : curve.lineTo(x, y);
+    }
+    g.setColour(curveColour);
+    g.strokePath(curve, juce::PathStrokeType(3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    int num = 1;
+    g.setFont(theme.labelFont(12.0f));
+    for (const auto& f : p->parametric.filters) {
+        if (f.type == bteq::FilterType::LowPass) { ++num; continue; }
+        const float x = juce::jmax(a.getX() + 9.0f, xOf(f.fc)), y = yOf(f.gainDb * k);
+        g.setColour(juce::Colour(0xff0B0C0D));
+        g.fillEllipse(x - 9, y - 9, 18, 18);
+        g.setColour(curveColour);
+        g.drawEllipse(x - 9, y - 9, 18, 18, 2.0f);
+        g.setColour(Theme::textBright);
+        g.drawText(juce::String(num++), juce::Rectangle<float>(x - 9, y - 9, 18, 18), juce::Justification::centred);
+    }
+}
+
+// ===========================================================================
+// Filters panel
+// ===========================================================================
+void FiltersPanel::paint(juce::Graphics& g) {
+    const auto* p = proc.selectedProfile();
+    const double k = proc.amount();
+    if (p == nullptr) {
+        g.setColour(Theme::soft);
+        g.setFont(theme.bodyFont(14.0f));
+        g.drawFittedText("Pick a headphone and a target. The filters will show here.", getLocalBounds().reduced(8),
+                         juce::Justification::topLeft, 3);
+        return;
+    }
+    if (proc.graphicModeActive()) {
+        auto r = getLocalBounds().reduced(6, 4);
+        g.setColour(Theme::text);
+        g.setFont(theme.labelFont(19.0f));
+        g.drawText("127-point GraphicEQ", r.removeFromTop(26), juce::Justification::centredLeft);
+        g.setColour(Theme::soft);
+        g.setFont(theme.bodyFont(14.0f));
+        g.drawFittedText("The same curve Wavelet and Equalizer APO's GraphicEQ use, applied as a minimum-phase "
+                         "filter exactly like Equalizer APO. Bars show every fourth point.",
+                         r.removeFromTop(60), juce::Justification::topLeft, 3);
+        const std::vector<double> raw(p->graphicGainsDb.begin(), p->graphicGainsDb.end());
+        const auto gains = bteq::scaleGraphicGains(raw, k);
+        const auto [lo, hi] = std::minmax_element(gains.begin(), gains.end());
+        g.setColour(Theme::text);
+        g.drawText("Range " + juce::String(*lo, 1) + " to " + juce::String(*hi, 1) + " dB (headroom built in)",
+                   r.removeFromTop(22), juce::Justification::centredLeft);
+        return;
+    }
+
+    const auto& fs = p->parametric.filters;
+    const int cols = 5, gap = 8;
+    const int cw = (getWidth() - gap * (cols - 1)) / cols, ch = 76;
+    for (int i = 0; i < (int)fs.size() && i < 10; ++i) {
+        const auto& f = fs[(size_t)i];
+        juce::Rectangle<float> card((float)((i % cols) * (cw + gap)), (float)((i / cols) * (ch + gap)), (float)cw, (float)ch);
+        g.setColour(juce::Colour(0x99060708));
+        g.fillRoundedRectangle(card, 8.0f);
+        g.setColour(juce::Colour(0x14ffffff));
+        g.drawRoundedRectangle(card.reduced(0.5f), 8.0f, 1.0f);
+        auto r = card.reduced(9, 6);
+        const char* type = f.type == bteq::FilterType::Peaking ? "PEAK"
+                         : f.type == bteq::FilterType::LowShelf ? "LOW SHELF"
+                         : f.type == bteq::FilterType::HighShelf ? "HIGH SHELF" : "LOW PASS";
+        auto top = r.removeFromTop(16);
+        g.setColour(accent.interpolatedWith(Theme::text, 0.25f));
+        g.setFont(theme.labelFont(13.0f));
+        g.drawText(juce::String(i + 1), top.removeFromLeft(16), juce::Justification::centredLeft);
+        g.setFont(theme.condFont(13.0f));
+        g.drawText(type, top, juce::Justification::centredRight);
+        g.setColour(Theme::text);
+        g.setFont(theme.bodyFont(14.0f, true));
+        g.drawText(formatFreq(f.fc), r.removeFromTop(19), juce::Justification::centredLeft);
+        g.setColour(juce::Colour(0xffB2AFA9));
+        g.setFont(theme.bodyFont(13.0f));
+        if (f.type == bteq::FilterType::LowPass) {
+            g.drawText("12 dB/oct", r.removeFromTop(16), juce::Justification::centredLeft);
+        } else {
+            g.drawText(formatDb(f.gainDb * k), r.removeFromTop(16), juce::Justification::centredLeft);
+            g.drawText("Q " + juce::String(f.q), r.removeFromTop(16), juce::Justification::centredLeft);
+        }
+    }
+    if (fs.size() > 10) {
+        g.setColour(Theme::muted);
+        g.setFont(theme.bodyFont(12.0f));
+        g.drawText("+" + juce::String((int)fs.size() - 10) + " more filters", getLocalBounds().removeFromBottom(16),
+                   juce::Justification::centredRight);
+    }
+}
+
+// ===========================================================================
+// Editor
+// ===========================================================================
+BteqEditor::BteqEditor(BteqProcessor& p)
+    : AudioProcessorEditor(&p), proc(p), lnf(*theme), graph(p, *theme), filters(p, *theme) {
+    setLookAndFeel(&lnf);
+    background = juce::ImageCache::getFromMemory(BinaryData::forest_png, BinaryData::forest_pngSize);
+
+    bypassButton.setButtonText("Bypass");
+    bypassButton.setClickingTogglesState(true);
+    bypassButton.getProperties().set("kind", "bypass");
+    addAndMakeVisible(bypassButton);
+    bypassAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.params, "bypass", bypassButton);
+
+    search.setTextToShowWhenEmpty("Search headphones", Theme::muted);
+    search.setFont(theme->bodyFont(16.0f));
+    search.setIndents(36, 13);
+    search.setTitle("Search headphones");
+    search.onTextChange = [this] { refreshHeadphones(); };
+    addAndMakeVisible(search);
+
+    for (auto* lb : { &headphoneList, &targetList }) {
+        lb->setRowHeight(34);
+        lb->setColour(juce::ListBox::backgroundColourId, juce::Colours::transparentBlack);
+        addAndMakeVisible(*lb);
+    }
+    headphoneList.setTitle("Matching headphones");
+    targetList.setTitle("Targets");
+
+    for (auto* tab : { &parametricTab, &graphicTab }) {
+        tab->getProperties().set("kind", "tab");
+        tab->setRadioGroupId(1);
+        addAndMakeVisible(*tab);
+    }
+    parametricTab.onClick = [this] { setMode(false); };
+    graphicTab.onClick = [this] { setMode(true); };
+
+    addAndMakeVisible(graph);
+    addAndMakeVisible(filters);
+
+    correction.setSliderStyle(juce::Slider::LinearHorizontal);
+    correction.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    correction.setTitle("Correction amount");
+    addAndMakeVisible(correction);
+    correctionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.params, "amount", correction);
+
+    for (int i = 0; i < Theme::numAccents; ++i) {
+        auto& s = swatches[(size_t)i];
+        s.getProperties().set("kind", "swatch");
+        s.getProperties().set("swatch", (juce::int64)Theme::accent(i).getARGB());
+        s.setTitle(Theme::accentName(i));
+        s.setTooltip(Theme::accentName(i));
+        s.setRadioGroupId(2);
+        s.onClick = [this, i] { setAccent(i); };
+        addAndMakeVisible(s);
+    }
+
+    setAccent(proc.accentIndex);
+    setSize(1080, 680);
+
+    // Start with the selected headphone (if any) shown in the search box.
+    if (proc.selectedHeadphone().isNotEmpty()) search.setText(proc.selectedHeadphone(), false);
+    refreshHeadphones();
+    refreshTargets();
+    startTimerHz(15);
+}
+
+BteqEditor::~BteqEditor() { setLookAndFeel(nullptr); }
+
+void BteqEditor::setAccent(int index) {
+    proc.accentIndex = juce::jlimit(0, Theme::numAccents - 1, index);
+    lnf.accentColour = graph.accent = filters.accent = Theme::accent(proc.accentIndex);
+    swatches[(size_t)proc.accentIndex].setToggleState(true, juce::dontSendNotification);
+    repaint();
+}
+
+void BteqEditor::setMode(bool graphicMode) {
+    if (auto* prm = proc.params.getParameter("mode")) prm->setValueNotifyingHost(graphicMode ? 1.0f : 0.0f);
+}
+
+void BteqEditor::refreshHeadphones() {
+    results = proc.library().search(search.getText().toStdString(), 500);
+    headphoneList.updateContent();
+    headphoneList.repaint();
+}
+
+void BteqEditor::refreshTargets() {
+    targetRows.clear();
+    shownHeadphone = proc.selectedHeadphone();
+    shownProfile = proc.selectedProfileIndex();
+    if (const auto idx = proc.library().headphoneIndex(shownHeadphone.toStdString())) {
+        const auto profs = proc.library().profilesFor(*idx);
+        juce::String lastHeading;
+        for (size_t i = 0; i < profs.size(); ++i) {
+            const auto* pr = profs[i];
+            const juce::String heading = pr->originalPreset ? juce::String(pr->source) + "'s own presets"
+                                                            : juce::String(pr->sourceLabel()) + " via AutoEQ";
+            if (heading != lastHeading) {
+                targetRows.push_back({ true, heading, -1 });
+                lastHeading = heading;
+            }
+            targetRows.push_back({ false, juce::String(pr->target), (int)i });
+        }
+    }
+    targetList.updateContent();
+    targetList.repaint();
+}
+
+void BteqEditor::timerCallback() {
+    if (proc.selectedHeadphone() != shownHeadphone || proc.selectedProfileIndex() != shownProfile) refreshTargets();
+
+    const auto* p = proc.selectedProfile();
+    const bool hasP = p != nullptr && p->hasParametric, hasG = proc.graphicAvailable();
+    parametricTab.setEnabled(hasP || p == nullptr);
+    graphicTab.setEnabled(hasG);
+    const bool graphic = proc.graphicModeActive();
+    parametricTab.setToggleState(!graphic, juce::dontSendNotification);
+    graphicTab.setToggleState(graphic, juce::dontSendNotification);
+    bypassButton.setButtonText(bypassButton.getToggleState() ? "Bypassed" : "Bypass");
+
+    graph.repaint();
+    filters.repaint();
+    repaint(kCorrectionPanel.withHeight(40));
+    repaint(kCorrectionPanel.withTrimmedTop(100).withHeight(30));
+    repaint(juce::Rectangle<int>(700, 0, 250, 72));
+    repaint(kTabsPanel.withX(kTabsPanel.getRight()).withWidth(kGraphPanel.getRight() - kTabsPanel.getRight()));
+}
+
+void BteqEditor::paint(juce::Graphics& g) {
+    const auto bounds = getLocalBounds().toFloat();
+    g.fillAll(juce::Colour(0xff0B0C0D));
+    if (background.isValid())
+        g.drawImageWithin(background, 0, 0, getWidth(), getHeight(), juce::RectanglePlacement::fillDestination);
+    juce::ColourGradient fog(juce::Colour(0x400A0B0C), bounds.getWidth() * 0.55f, bounds.getHeight() * 0.3f,
+                             juce::Colour(0xe608090A), 0.0f, bounds.getHeight() * 1.05f, true);
+    fog.addColour(0.55, juce::Colour(0x9e0A0B0C));
+    g.setGradientFill(fog);
+    g.fillRect(bounds);
+
+    // Header.
+    g.setColour(juce::Colour(0x14ffffff));
+    g.drawHorizontalLine(72, 0.0f, bounds.getWidth());
+    g.setColour(juce::Colour(0xffECE8E0));
+    const auto titleFont = theme->titleFont(42.0f);
+    g.setFont(titleFont);
+    g.drawText("Born To EQ The World", 26, 12, 460, 48, juce::Justification::centredLeft);
+    const int titleW = (int)juce::GlyphArrangement::getStringWidth(titleFont, "Born To EQ The World");
+    g.setColour(Theme::muted);
+    g.setFont(theme->labelFont(15.0f));
+    g.drawText("HEADPHONE CORRECTION", 26 + titleW + 18, 27, 260, 24, juce::Justification::centredLeft);
+
+    const double pre = proc.currentPreampDb() * (proc.params.getRawParameterValue("bypass")->load() > 0.5f ? 0.0 : 1.0);
+    g.setFont(theme->labelFont(16.0f));
+    g.setColour(Theme::muted);
+    g.drawText("PREAMP", 760, 20, 80, 32, juce::Justification::centredRight);
+    g.setColour(Theme::text);
+    g.drawText(formatDb(pre), 846, 20, 82, 32, juce::Justification::centredLeft);
+
+    // Panels.
+    for (auto r : { kHeadphonePanel, kTargetPanel, kTabsPanel, kGraphPanel, kFiltersPanel, kCorrectionPanel }) drawPanel(g, r);
+
+    g.setFont(theme->labelFont(15.0f));
+    g.setColour(Theme::muted);
+    g.drawText("HEADPHONE", kHeadphonePanel.getX() + 14, kHeadphonePanel.getY() + 12, 200, 18, juce::Justification::centredLeft);
+    g.drawText("TARGET", kTargetPanel.getX() + 14, kTargetPanel.getY() + 12, 200, 18, juce::Justification::centredLeft);
+    g.drawText("CORRECTION", kCorrectionPanel.getX() + 14, kCorrectionPanel.getY() + 16, 120, 18, juce::Justification::centredLeft);
+    g.drawText("COLOUR", kCorrectionPanel.getX() + 14, kCorrectionPanel.getBottom() - 46, 100, 32, juce::Justification::centredLeft);
+
+    // Search icon.
+    {
+        const auto sb = search.getBounds().toFloat();
+        g.setColour(Theme::muted);
+        g.drawEllipse(sb.getX() + 13, sb.getCentreY() - 7, 11, 11, 1.8f);
+        g.drawLine(sb.getX() + 22.5f, sb.getCentreY() + 2.5f, sb.getX() + 27, sb.getCentreY() + 7, 1.8f);
+    }
+
+    // Mode note next to the tabs.
+    g.setFont(theme->bodyFont(14.0f));
+    g.setColour(Theme::soft);
+    const auto* p = proc.selectedProfile();
+    juce::String note;
+    if (p != nullptr) {
+        if (proc.graphicModeActive()) note = "Wavelet-style 127-point curve";
+        else if (p->originalPreset) note = juce::String((int)p->parametric.filters.size()) + " filters, exactly as " + juce::String(p->source) + " published them";
+        else note = juce::String((int)p->parametric.filters.size()) + " filters from AutoEQ";
+        if (!proc.graphicAvailable() && p->hasParametric) note << " (no graphic version)";
+    }
+    g.drawText(note, kTabsPanel.getRight() + 14, kTabsPanel.getY(), kGraphPanel.getRight() - kTabsPanel.getRight() - 14,
+               kTabsPanel.getHeight(), juce::Justification::centredRight);
+
+    // Correction readouts.
+    const int pct = (int)std::round(proc.params.getRawParameterValue("amount")->load());
+    g.setColour(Theme::textBright);
+    g.setFont(theme->labelFont(36.0f).withExtraKerningFactor(0.0f));
+    g.drawText(juce::String(pct) + "%", kCorrectionPanel.getRight() - 114, kCorrectionPanel.getY() + 8, 100, 38,
+               juce::Justification::centredRight);
+    g.setFont(theme->bodyFont(12.0f));
+    g.setColour(Theme::muted);
+    const auto sl = correction.getBounds();
+    g.drawText("Off", sl.getX(), sl.getBottom() + 2, 40, 14, juce::Justification::centredLeft);
+    g.drawText("50%", sl.getCentreX() - 20, sl.getBottom() + 2, 40, 14, juce::Justification::centred);
+    g.drawText("Full", sl.getRight() - 40, sl.getBottom() + 2, 40, 14, juce::Justification::centredRight);
+    g.setFont(theme->bodyFont(13.0f));
+    g.setColour(juce::Colour(0xffB2AFA9));
+    g.drawText("Preamp", kCorrectionPanel.getX() + 14, kCorrectionPanel.getY() + 104, 100, 20, juce::Justification::centredLeft);
+    g.setColour(Theme::text);
+    g.drawText(formatDb(pre), kCorrectionPanel.getRight() - 114, kCorrectionPanel.getY() + 104, 100, 20,
+               juce::Justification::centredRight);
+    g.setColour(juce::Colour(0x14ffffff));
+    g.drawHorizontalLine(kCorrectionPanel.getBottom() - 54, (float)kCorrectionPanel.getX() + 14, (float)kCorrectionPanel.getRight() - 14);
+
+    if (!proc.libraryLoaded()) {
+        g.setColour(juce::Colour(0xffFFB5A6));
+        g.setFont(theme->bodyFont(14.0f));
+        g.drawText("The headphone library could not be loaded.", kTargetPanel.reduced(14), juce::Justification::centred);
+    }
+}
+
+void BteqEditor::resized() {
+    bypassButton.setBounds(getWidth() - 26 - 110, 14, 110, 44);
+    search.setBounds(kHeadphonePanel.getX() + 14, kHeadphonePanel.getY() + 38, kHeadphonePanel.getWidth() - 28, 44);
+    headphoneList.setBounds(kHeadphonePanel.getX() + 10, kHeadphonePanel.getY() + 90, kHeadphonePanel.getWidth() - 20,
+                            kHeadphonePanel.getHeight() - 100);
+    targetList.setBounds(kTargetPanel.getX() + 10, kTargetPanel.getY() + 38, kTargetPanel.getWidth() - 20,
+                         kTargetPanel.getHeight() - 48);
+    parametricTab.setBounds(kTabsPanel.getX() + 4, kTabsPanel.getY() + 4, 132, 40);
+    graphicTab.setBounds(kTabsPanel.getX() + 140, kTabsPanel.getY() + 4, 132, 40);
+    graph.setBounds(kGraphPanel.reduced(12, 8));
+    filters.setBounds(kFiltersPanel.reduced(12));
+    correction.setBounds(kCorrectionPanel.getX() + 12, kCorrectionPanel.getY() + 58, kCorrectionPanel.getWidth() - 24, 26);
+    for (int i = 0; i < Theme::numAccents; ++i)
+        swatches[(size_t)i].setBounds(kCorrectionPanel.getRight() - 14 - (Theme::numAccents - i) * 36 + 2,
+                                      kCorrectionPanel.getBottom() - 46, 34, 34);
+}
+
+// List models -----------------------------------------------------------------
+void BteqEditor::HeadphoneModel::paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool) {
+    if (row < 0 || row >= (int)ed.results.size()) return;
+    const juce::String name(ed.proc.library().headphoneName(ed.results[(size_t)row]));
+    const bool on = name == ed.proc.selectedHeadphone();
+    if (on) {
+        g.setColour(Theme::selected);
+        g.fillRoundedRectangle(0.0f, 1.0f, (float)w, (float)h - 2.0f, 6.0f);
+    }
+    g.setColour(on ? Theme::textBright : Theme::soft);
+    g.setFont(ed.theme->bodyFont(15.0f, on));
+    g.drawText(name, 10, 0, w - 16, h, juce::Justification::centredLeft, true);
+}
+
+void BteqEditor::HeadphoneModel::listBoxItemClicked(int row, const juce::MouseEvent&) {
+    if (row < 0 || row >= (int)ed.results.size()) return;
+    ed.proc.selectHeadphone(ed.proc.library().headphoneName(ed.results[(size_t)row]));
+    ed.refreshTargets();
+    ed.headphoneList.repaint();
+    ed.repaint();
+}
+
+void BteqEditor::TargetModel::paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool) {
+    if (row < 0 || row >= (int)ed.targetRows.size()) return;
+    const auto& r = ed.targetRows[(size_t)row];
+    if (r.header) {
+        g.setColour(Theme::muted);
+        g.setFont(ed.theme->bodyFont(13.0f));
+        g.drawText(r.text, 2, h / 2 - 2, w - 4, h / 2, juce::Justification::centredLeft, true);
+        return;
+    }
+    const bool on = r.profile == ed.proc.selectedProfileIndex();
+    if (on) {
+        g.setColour(Theme::selected);
+        g.fillRoundedRectangle(0.0f, 1.0f, (float)w, (float)h - 2.0f, 6.0f);
+    }
+    const auto accent = Theme::accent(ed.proc.accentIndex);
+    const juce::Rectangle<float> dot(10.0f, h * 0.5f - 5.0f, 10.0f, 10.0f);
+    g.setColour(on ? accent : juce::Colour(0xff6E7178));
+    if (on) g.fillEllipse(dot);
+    g.drawEllipse(dot, 2.0f);
+    g.setColour(on ? Theme::textBright : Theme::soft);
+    g.setFont(ed.theme->bodyFont(15.0f, on));
+    g.drawText(r.text, 30, 0, w - 34, h, juce::Justification::centredLeft, true);
+}
+
+void BteqEditor::TargetModel::listBoxItemClicked(int row, const juce::MouseEvent&) {
+    if (row < 0 || row >= (int)ed.targetRows.size() || ed.targetRows[(size_t)row].header) return;
+    ed.proc.selectProfile(ed.targetRows[(size_t)row].profile);
+    ed.shownProfile = ed.proc.selectedProfileIndex();
+    ed.targetList.repaint();
+    ed.repaint();
+}

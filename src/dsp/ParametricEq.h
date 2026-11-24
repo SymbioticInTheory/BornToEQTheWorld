@@ -134,6 +134,7 @@ public:
     }
 
     double getPreampDb() const { return preampDb; }
+    int numChannels() const { return static_cast<int>(channels.size()); }
 
 private:
     double fs = 48000;

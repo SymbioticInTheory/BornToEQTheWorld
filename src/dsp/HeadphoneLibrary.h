@@ -173,11 +173,18 @@ public:
 
     // Profiles for one headphone: oratory1990's own presets first, then AutoEQ's
     // recommended source, then the other sources.
-    std::vector<const HeadphoneProfile*> profilesFor(size_t headphoneIndex) const {
+    std::vector<const HeadphoneProfile*> profilesFor(size_t index) const {
         std::vector<const HeadphoneProfile*> out;
-        const auto& n = names[headphoneIndex];
+        const auto& n = names[index];
         for (size_t i = 0; i < n.count; ++i) out.push_back(&profiles[n.first + i]);
         return out;
+    }
+
+    // Index of the headphone with exactly this name.
+    std::optional<size_t> headphoneIndex(const std::string& name) const {
+        for (size_t i = 0; i < names.size(); ++i)
+            if (names[i].name == name) return i;
+        return std::nullopt;
     }
 
     // Exact-name lookup, optionally narrowed to one source and to AutoEQ results
