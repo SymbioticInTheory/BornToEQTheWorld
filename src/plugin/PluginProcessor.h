@@ -7,6 +7,7 @@
 #include "dsp/HeadphoneLibrary.h"
 
 #include <atomic>
+#include <map>
 #include <memory>
 
 // The headphone library, decompressed and parsed once per process and shared
@@ -54,7 +55,27 @@ public:
     bool graphicAvailable() const;
     bool graphicModeActive() const;
     double amount() const; // 0..1, 0 when bypassed
-    double currentPreampDb() const;
+    double currentPreampDb() const; // what is applied now (scaled by the correction amount)
+
+    // Your own changes to a profile, kept per profile and saved with the session.
+    struct ProfileEdit {
+        bool filtersEdited = false, preampEdited = false;
+        std::vector<bteq::FilterSpec> filters;
+        double preampDb = 0;
+    };
+    bteq::ParametricPreset effectiveParametric() const; // published filters with your edits applied
+    double publishedPreampDb() const;                   // preamp before any edits
+    double preampSettingDb() const;                     // preamp at 100% correction, with your edit
+    std::vector<double> graphicShapeDb() const;         // graphic curve with the published preamp taken out
+    bool selectionEdited() const;
+    void setFilter(int index, const bteq::FilterSpec& spec);
+    void setPreamp(double db);
+    void resetEdits();
+
+    // Snapshot of the current choice (headphone, profile, mode, correction and
+    // your edits), used by the saved profiles menu.
+    juce::ValueTree makeSnapshot() const;
+    void loadSnapshot(const juce::ValueTree& snapshot);
 
     int accentIndex = 0; // UI colour choice, saved with the session
     juce::AudioProcessorValueTreeState params;
@@ -71,6 +92,10 @@ private:
 
     juce::String headphoneName;
     int profileIndex = 0;
+    std::map<juce::String, ProfileEdit> edits; // keyed by profile key
+    int editVersion = 0, builtEditVersion = -1;
+    const ProfileEdit* currentEdit() const;
+    int indexForKey(const juce::String& headphone, const juce::String& key) const;
 
     std::atomic<float>* amountParam = nullptr;
     std::atomic<float>* bypassParam = nullptr;

@@ -5,6 +5,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <array>
+#include <functional>
 
 // Fonts and colours shared by the editor's components.
 struct Theme {
@@ -40,35 +41,54 @@ public:
     void drawTextEditorOutline(juce::Graphics&, int w, int h, juce::TextEditor&) override;
     void drawScrollbar(juce::Graphics&, juce::ScrollBar&, int x, int y, int w, int h, bool vertical, int thumbStart,
                        int thumbSize, bool over, bool down) override;
+    juce::Font getPopupMenuFont() override;
     juce::Colour accentColour;
 
 private:
     const Theme& theme;
 };
 
+// The response curve. In parametric mode the numbered points can be dragged
+// (frequency and gain), and scrolling over a point changes its Q.
 class ResponseGraph : public juce::Component {
 public:
     ResponseGraph(BteqProcessor& p, const Theme& t) : proc(p), theme(t) {}
     void paint(juce::Graphics&) override;
+    void mouseMove(const juce::MouseEvent&) override;
+    void mouseDown(const juce::MouseEvent&) override;
+    void mouseDrag(const juce::MouseEvent&) override;
+    void mouseUp(const juce::MouseEvent&) override;
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     juce::Colour accent;
 
 private:
     juce::Rectangle<float> plotArea() const;
     float xOf(double f) const;
     float yOf(double db) const;
+    juce::Point<float> nodePosition(const bteq::FilterSpec& f, double k) const;
+    int nodeAt(juce::Point<float> pos) const;
+    int dragIndex = -1;
     BteqProcessor& proc;
     const Theme& theme;
 };
 
+// Filter cards. Each value is a label you can click and type into.
 class FiltersPanel : public juce::Component {
 public:
-    FiltersPanel(BteqProcessor& p, const Theme& t) : proc(p), theme(t) {}
+    static constexpr int maxCards = 10;
+    FiltersPanel(BteqProcessor& p, const Theme& t);
     void paint(juce::Graphics&) override;
+    void resized() override;
+    void refresh(); // update the values from the processor (message thread)
     juce::Colour accent;
 
 private:
+    enum Field { Freq, Gain, Q, numFields };
+    juce::Rectangle<int> cardBounds(int i) const;
+    void commit(int card, Field field, const juce::String& text);
     BteqProcessor& proc;
     const Theme& theme;
+    std::array<std::array<juce::Label, numFields>, maxCards> values;
 };
 
 class BteqEditor : public juce::AudioProcessorEditor, private juce::Timer {
@@ -84,6 +104,12 @@ private:
     void refreshTargets();
     void setAccent(int index);
     void setMode(bool graphic);
+    void refreshEditing();
+    void showSavedMenu();
+    void askForName(const juce::String& title, const juce::String& initial, std::function<void(juce::String)> done);
+    static juce::File savedProfilesFile();
+    static juce::ValueTree loadSavedProfiles();
+    static void storeSavedProfiles(const juce::ValueTree&);
 
     // Headphone search results.
     struct HeadphoneModel : juce::ListBoxModel {
@@ -128,6 +154,13 @@ private:
     juce::Slider correction;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> correctionAttachment;
     std::array<juce::TextButton, Theme::numAccents> swatches;
+
+    juce::Label preampValue;
+    juce::TextButton resetButton { "Reset" };
+    juce::TextButton savedButton;
+    juce::String loadedSavedName;      // the saved profile shown on the dropdown
+    juce::String loadedSavedSelection; // headphone + profile it was loaded for
+    std::unique_ptr<juce::AlertWindow> nameWindow;
 
     juce::String shownHeadphone;
     int shownProfile = -1;
