@@ -11,6 +11,14 @@ LibraryHolder::LibraryHolder() {
     loaded = library.loadFromText(std::string(static_cast<const char*>(text.getData()), text.getSize()));
 }
 
+CurvesHolder::CurvesHolder() {
+    juce::MemoryInputStream compressed(BinaryData::curves_tsv_gz, BinaryData::curves_tsv_gzSize, false);
+    juce::GZIPDecompressorInputStream gz(&compressed, false, juce::GZIPDecompressorInputStream::gzipFormat);
+    juce::MemoryBlock text;
+    gz.readIntoMemoryBlock(text);
+    loaded = curves.loadFromText(std::string(static_cast<const char*>(text.getData()), text.getSize()));
+}
+
 namespace {
 const juce::String kAmount = "amount", kBypass = "bypass", kMode = "mode", kTrim = "trim";
 
@@ -341,6 +349,8 @@ void BteqProcessor::getStateInformation(juce::MemoryBlock& destData) {
     const auto* p = selectedProfile();
     state.setProperty("profile", p ? profileKey(*p) : juce::String(), nullptr);
     state.setProperty("accent", accentIndex, nullptr);
+    state.setProperty("advanced", advancedView, nullptr);
+    state.setProperty("hiddenCurves", hiddenCurves, nullptr);
     {
         const juce::ScopedLock sl(buildLock);
         juce::ValueTree list("EDITS");
@@ -373,6 +383,8 @@ void BteqProcessor::setStateInformation(const void* data, int sizeInBytes) {
     }
     headphoneName = state.getProperty("headphone").toString();
     accentIndex = (int)state.getProperty("accent", 0);
+    advancedView = (bool)state.getProperty("advanced", false);
+    hiddenCurves = (int)state.getProperty("hiddenCurves", 0);
     profileIndex = indexForKey(headphoneName, state.getProperty("profile").toString());
     rebuild(true);
 }

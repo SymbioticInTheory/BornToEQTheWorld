@@ -103,6 +103,14 @@ void BteqLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, c
         }
         return;
     }
+    if (kind == "pill") {
+        const bool on = b.getToggleState();
+        g.setColour(on ? accentColour.withAlpha(0.22f) : over ? Theme::selected : juce::Colours::transparentBlack);
+        g.fillRoundedRectangle(r.reduced(0.5f), r.getHeight() * 0.5f);
+        g.setColour(on ? accentColour : juce::Colour(0x29ffffff));
+        g.drawRoundedRectangle(r.reduced(0.5f), r.getHeight() * 0.5f, 1.0f);
+        return;
+    }
     if (kind == "dropdown") {
         g.setColour(over ? juce::Colour(0xcc101113) : Theme::field);
         g.fillRoundedRectangle(r, 8.0f);
@@ -135,6 +143,12 @@ void BteqLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& b, boo
         g.setColour(b.getProperties()["placeholder"] ? Theme::muted : Theme::text);
         g.setFont(theme.bodyFont(14.0f, true));
         g.drawText(b.getButtonText(), r.withTrimmedRight(6), juce::Justification::centredLeft, true);
+        return;
+    }
+    if (kind == "pill") {
+        g.setColour(b.getToggleState() ? Theme::textBright : Theme::soft);
+        g.setFont(theme.labelFont(13.0f));
+        g.drawText(b.getButtonText().toUpperCase(), b.getLocalBounds(), juce::Justification::centred);
         return;
     }
     if (kind == "small") {
@@ -189,7 +203,27 @@ void BteqLookAndFeel::drawScrollbar(juce::Graphics& g, juce::ScrollBar&, int x, 
 // ===========================================================================
 // Response graph
 // ===========================================================================
-juce::Rectangle<float> ResponseGraph::plotArea() const { return getLocalBounds().toFloat().withTrimmedLeft(34).withTrimmedBottom(22).withTrimmedTop(6).withTrimmedRight(6); }
+ResponseGraph::ResponseGraph(BteqProcessor& p, const Theme& t) : proc(p), theme(t) {
+    advancedButton.getProperties().set("kind", "pill");
+    advancedButton.setClickingTogglesState(true);
+    advancedButton.setTooltip("Show the target, your headphone's measurement and the corrected result");
+    advancedButton.onClick = [this] { setAdvanced(advancedButton.getToggleState()); };
+    addAndMakeVisible(advancedButton);
+    setAdvanced(proc.advancedView);
+}
+
+void ResponseGraph::setAdvanced(bool on) {
+    proc.advancedView = on;
+    advancedButton.setToggleState(on, juce::dontSendNotification);
+    if (on && curves == nullptr) curves = std::make_unique<juce::SharedResourcePointer<CurvesHolder>>();
+    repaint();
+}
+
+void ResponseGraph::resized() { advancedButton.setBounds(getWidth() - 96, 2, 96, 24); }
+
+juce::Rectangle<float> ResponseGraph::plotArea() const {
+    return getLocalBounds().toFloat().withTrimmedLeft(34).withTrimmedBottom(22).withTrimmedTop(38).withTrimmedRight(6);
+}
 
 float ResponseGraph::xOf(double f) const {
     const auto a = plotArea();
@@ -198,22 +232,27 @@ float ResponseGraph::xOf(double f) const {
 
 float ResponseGraph::yOf(double db) const {
     const auto a = plotArea();
-    const double clamped = juce::jlimit(-13.0, 13.0, db);
-    return a.getCentreY() - (float)(clamped / 12.0) * a.getHeight() * 0.5f;
+    const double r = rangeDb();
+    const double clamped = juce::jlimit(-r - 1.0, r + 1.0, db);
+    return a.getCentreY() - (float)(clamped / r) * a.getHeight() * 0.5f;
 }
 
 void ResponseGraph::paint(juce::Graphics& g) {
     const auto a = plotArea();
+    const double r = rangeDb();
+    std::vector<double> lines;
+    for (double db = -r; db <= r + 0.1; db += 6.0) lines.push_back(db);
     // Grid.
     g.setColour(Theme::grid);
-    for (double db : { -12.0, -6.0, 6.0, 12.0 }) g.drawHorizontalLine((int)yOf(db), a.getX(), a.getRight());
+    for (double db : lines)
+        if (std::abs(db) > 0.1) g.drawHorizontalLine((int)yOf(db), a.getX(), a.getRight());
     for (double f : { 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0 }) g.drawVerticalLine((int)xOf(f), a.getY(), a.getBottom());
     g.setColour(juce::Colour(0x33ffffff));
     g.drawHorizontalLine((int)yOf(0), a.getX(), a.getRight());
 
     g.setFont(theme.condFont(13.0f));
     g.setColour(Theme::muted);
-    for (double db : { -12.0, -6.0, 0.0, 6.0, 12.0 })
+    for (double db : lines)
         g.drawText((db > 0 ? "+" : "") + juce::String((int)db), juce::Rectangle<float>(0, yOf(db) - 8, a.getX() - 8, 16),
                    juce::Justification::centredRight);
     const std::pair<double, const char*> ticks[] = { { 20, "20" }, { 50, "50" }, { 100, "100" }, { 200, "200" }, { 500, "500" },
@@ -221,6 +260,7 @@ void ResponseGraph::paint(juce::Graphics& g) {
     for (const auto& t : ticks)
         g.drawText(t.second, juce::Rectangle<float>(xOf(t.first) - 20, a.getBottom() + 4, 40, 16), juce::Justification::centred);
 
+    for (auto& h : legendHit) h = {};
     const auto* p = proc.selectedProfile();
     const double k = proc.amount();
     const juce::Colour curveColour = proc.params.getRawParameterValue("bypass")->load() > 0.5f ? juce::Colour(0xff6E7178) : accent;
@@ -233,7 +273,16 @@ void ResponseGraph::paint(juce::Graphics& g) {
                    juce::Justification::centred);
         return;
     }
+    if (proc.advancedView) {
+        paintAdvanced(g, *p, k, curveColour);
+        return;
+    }
+    paintEq(g, k, curveColour, 3.0f, true);
+}
 
+// The EQ curve (without preamp), and in parametric mode its numbered points.
+void ResponseGraph::paintEq(juce::Graphics& g, double k, juce::Colour colour, float width, bool nodes) {
+    const auto a = plotArea();
     juce::Path curve;
     const int points = 300;
     if (proc.graphicModeActive()) {
@@ -241,17 +290,18 @@ void ResponseGraph::paint(juce::Graphics& g) {
         const auto& freqs = proc.library().graphicFrequencies();
         auto gains = proc.graphicShapeDb();
         for (auto& gn : gains) gn *= k;
-        for (size_t i = 0; i < freqs.size(); i += 4) {
-            g.setColour(curveColour.withAlpha(0.35f));
-            g.drawLine(xOf(freqs[i]), yOf(0), xOf(freqs[i]), yOf(gains[i]), 5.0f);
-        }
+        if (nodes)
+            for (size_t i = 0; i < freqs.size(); i += 4) {
+                g.setColour(colour.withAlpha(0.35f));
+                g.drawLine(xOf(freqs[i]), yOf(0), xOf(freqs[i]), yOf(gains[i]), 5.0f);
+            }
         for (int i = 0; i <= points; ++i) {
             const double f = 20.0 * std::pow(1000.0, i / (double)points);
             const float x = xOf(f), y = yOf(bteq::graphicGainAt(freqs, gains, f));
             i == 0 ? curve.startNewSubPath(x, y) : curve.lineTo(x, y);
         }
-        g.setColour(curveColour);
-        g.strokePath(curve, juce::PathStrokeType(3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour(colour);
+        g.strokePath(curve, juce::PathStrokeType(width, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         return;
     }
 
@@ -266,8 +316,9 @@ void ResponseGraph::paint(juce::Graphics& g) {
         const float x = xOf(f), y = yOf(db);
         i == 0 ? curve.startNewSubPath(x, y) : curve.lineTo(x, y);
     }
-    g.setColour(curveColour);
-    g.strokePath(curve, juce::PathStrokeType(3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour(colour);
+    g.strokePath(curve, juce::PathStrokeType(width, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    if (!nodes) return;
 
     int num = 1;
     g.setFont(theme.labelFont(12.0f));
@@ -275,12 +326,111 @@ void ResponseGraph::paint(juce::Graphics& g) {
         if (f.type == bteq::FilterType::LowPass) { ++num; continue; }
         const auto pos = nodePosition(f, k);
         const float x = pos.x, y = pos.y;
-        g.setColour(num - 1 == dragIndex ? curveColour.withAlpha(0.45f) : juce::Colour(0xff0B0C0D));
+        g.setColour(num - 1 == dragIndex ? colour.withAlpha(0.45f) : juce::Colour(0xff0B0C0D));
         g.fillEllipse(x - 9, y - 9, 18, 18);
-        g.setColour(curveColour);
+        g.setColour(colour);
         g.drawEllipse(x - 9, y - 9, 18, 18, 2.0f);
         g.setColour(Theme::textBright);
         g.drawText(juce::String(num++), juce::Rectangle<float>(x - 9, y - 9, 18, 18), juce::Justification::centred);
+    }
+}
+
+// Target, measured and corrected curves like autoeq.app. The corrected curve
+// is the measurement plus the EQ as it is set now (edits and correction amount
+// included); both are shifted to sit on the target between 300 Hz and 3 kHz.
+void ResponseGraph::paintAdvanced(juce::Graphics& g, const bteq::HeadphoneProfile& p, double k, juce::Colour curveColour) {
+    const auto& freqs = proc.library().graphicFrequencies();
+    bteq::CurveLibrary::Curves c;
+    if (curves != nullptr && (*curves)->loaded) c = (*curves)->curves.find(p.name, p.source, p.rig, p.originalPreset, p.target);
+
+    // EQ response on the curve frequencies.
+    std::vector<double> eq(freqs.size(), 0.0);
+    if (proc.graphicModeActive()) {
+        const auto shape = proc.graphicShapeDb();
+        for (size_t i = 0; i < eq.size() && i < shape.size(); ++i) eq[i] = shape[i] * k;
+    } else {
+        for (const auto& f : proc.effectiveParametric().filters) {
+            if (!f.enabled) continue;
+            const auto co = bteq::BiquadCoeffs::make(f.type, f.fc, f.gainDb * k, f.q, 48000.0);
+            for (size_t i = 0; i < eq.size(); ++i) eq[i] += co.magnitudeDb(freqs[i], 48000.0);
+        }
+    }
+
+    std::vector<double> measured, corrected;
+    double offset = 0;
+    if (c.measured != nullptr && c.measured->size() == freqs.size()) {
+        for (size_t i = 0; i < freqs.size(); ++i) {
+            measured.push_back((*c.measured)[i]);
+            corrected.push_back((*c.measured)[i] + eq[i]);
+        }
+        if (c.target != nullptr) {
+            double sum = 0;
+            int n = 0;
+            for (size_t i = 0; i < freqs.size(); ++i)
+                if (freqs[i] >= 300 && freqs[i] <= 3000) { sum += (*c.target)[i] - corrected[i]; ++n; }
+            offset = n > 0 ? sum / n : 0.0;
+        }
+    }
+
+    auto drawCurve = [&](const std::vector<double>& v, double shift, juce::Colour col, float width, bool dashed) {
+        juce::Path path;
+        for (size_t i = 0; i < v.size(); ++i) {
+            const float x = xOf(freqs[i]), y = yOf(v[i] + shift);
+            i == 0 ? path.startNewSubPath(x, y) : path.lineTo(x, y);
+        }
+        const juce::PathStrokeType stroke(width, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+        g.setColour(col);
+        if (dashed) {
+            juce::Path d;
+            const float dashes[] = { 7.0f, 5.0f };
+            stroke.createDashedStroke(d, path, dashes, 2);
+            g.fillPath(d);
+        } else {
+            g.strokePath(path, stroke);
+        }
+    };
+
+    const juce::Colour targetColour(0xffD9D5CD), measuredColour(0xff7E8893);
+    const bool hasMeasured = !measured.empty(), hasTarget = c.target != nullptr;
+    auto visible = [this](Curve cv) { return (proc.hiddenCurves & (1 << cv)) == 0; };
+
+    if (hasTarget && visible(Target)) {
+        const std::vector<double> t(c.target->begin(), c.target->end());
+        drawCurve(t, 0.0, targetColour.withAlpha(0.8f), 2.0f, true);
+    }
+    if (hasMeasured && visible(Measured)) drawCurve(measured, offset, measuredColour, 2.0f, false);
+    if (visible(Eq)) paintEq(g, k, curveColour.withAlpha(0.55f), 1.8f, !proc.graphicModeActive());
+    if (hasMeasured && visible(Corrected)) drawCurve(corrected, offset, curveColour, 3.0f, false);
+
+    // Legend: click a name to show or hide its curve.
+    struct Item { Curve id; const char* name; juce::Colour colour; bool available; };
+    const Item items[] = { { Target, "Target", targetColour, hasTarget },
+                           { Measured, "Measured", measuredColour, hasMeasured },
+                           { Corrected, "Corrected", curveColour, hasMeasured },
+                           { Eq, "EQ", curveColour.withAlpha(0.55f), true } };
+    float x = plotArea().getX();
+    g.setFont(theme.bodyFont(14.0f, true));
+    for (const auto& it : items) {
+        const float w = 30.0f + juce::GlyphArrangement::getStringWidth(g.getCurrentFont(), it.name);
+        const juce::Rectangle<float> box(x, 2.0f, w, 24.0f);
+        const bool on = it.available && visible(it.id);
+        if (it.available) legendHit[(size_t)it.id] = box;
+        const auto sw = juce::Rectangle<float>(box.getX() + 4, box.getCentreY() - 1.5f, 16, 3);
+        g.setColour(on ? it.colour : it.colour.withAlpha(0.25f));
+        g.fillRoundedRectangle(sw, 1.5f);
+        g.setColour(!it.available ? Theme::muted.withAlpha(0.4f) : on ? Theme::text : Theme::muted.withAlpha(0.6f));
+        g.drawText(it.name, box.withTrimmedLeft(26), juce::Justification::centredLeft);
+        if (it.available && !on) g.drawHorizontalLine((int)box.getCentreY(), box.getX() + 26, box.getRight() - 4);
+        x += w + 12;
+    }
+    if (curves != nullptr && !(*curves)->loaded) {
+        g.setColour(juce::Colour(0xffFFB5A6));
+        g.drawText("Curves could not be loaded", juce::Rectangle<float>(x, 2, 240, 24), juce::Justification::centredLeft);
+    } else if (!hasMeasured) {
+        g.setColour(Theme::muted);
+        g.setFont(theme.bodyFont(13.0f));
+        g.drawText("No measurement from this source", juce::Rectangle<float>(x, 2, getWidth() - x - 104, 24),
+                   juce::Justification::centredLeft, true);
     }
 }
 
@@ -290,6 +440,7 @@ juce::Point<float> ResponseGraph::nodePosition(const bteq::FilterSpec& f, double
 
 int ResponseGraph::nodeAt(juce::Point<float> pos) const {
     if (proc.selectedProfile() == nullptr || proc.graphicModeActive()) return -1;
+    if (proc.advancedView && (proc.hiddenCurves & (1 << Eq)) != 0) return -1;
     const auto preset = proc.effectiveParametric();
     const double k = proc.amount();
     int best = -1;
@@ -304,10 +455,25 @@ int ResponseGraph::nodeAt(juce::Point<float> pos) const {
 }
 
 void ResponseGraph::mouseMove(const juce::MouseEvent& e) {
-    setMouseCursor(nodeAt(e.position) >= 0 ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
+    bool overLegend = false;
+    if (proc.advancedView)
+        for (const auto& h : legendHit) overLegend = overLegend || h.contains(e.position);
+    setMouseCursor(nodeAt(e.position) >= 0 ? juce::MouseCursor::DraggingHandCursor
+                   : overLegend            ? juce::MouseCursor::PointingHandCursor
+                                           : juce::MouseCursor::NormalCursor);
 }
 
-void ResponseGraph::mouseDown(const juce::MouseEvent& e) { dragIndex = nodeAt(e.position); repaint(); }
+void ResponseGraph::mouseDown(const juce::MouseEvent& e) {
+    if (proc.advancedView)
+        for (int i = 0; i < numCurves; ++i)
+            if (legendHit[(size_t)i].contains(e.position)) {
+                proc.hiddenCurves ^= 1 << i;
+                repaint();
+                return;
+            }
+    dragIndex = nodeAt(e.position);
+    repaint();
+}
 
 void ResponseGraph::mouseDrag(const juce::MouseEvent& e) {
     if (dragIndex < 0) return;
@@ -319,7 +485,7 @@ void ResponseGraph::mouseDrag(const juce::MouseEvent& e) {
     f.fc = roundFreq(20.0 * std::pow(1000.0, x));
     const double k = proc.amount();
     if (k > 0.01) {
-        const double db = (a.getCentreY() - e.position.y) / (a.getHeight() * 0.5) * 12.0;
+        const double db = (a.getCentreY() - e.position.y) / (a.getHeight() * 0.5) * rangeDb();
         f.gainDb = juce::jlimit(-20.0, 20.0, std::round(db / k * 10.0) / 10.0);
     }
     proc.setFilter(dragIndex, f);

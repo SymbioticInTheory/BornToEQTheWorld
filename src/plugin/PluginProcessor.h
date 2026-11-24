@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 
+#include "dsp/CurveLibrary.h"
 #include "dsp/GraphicEq.h"
 #include "dsp/HeadphoneLibrary.h"
 
@@ -15,6 +16,14 @@
 struct LibraryHolder {
     LibraryHolder();
     bteq::HeadphoneLibrary library;
+    bool loaded = false;
+};
+
+// Measurements and targets for the advanced graph. Loaded the first time the
+// advanced view is opened, then shared by every instance.
+struct CurvesHolder {
+    CurvesHolder();
+    bteq::CurveLibrary curves;
     bool loaded = false;
 };
 
@@ -78,6 +87,8 @@ public:
     void loadSnapshot(const juce::ValueTree& snapshot);
 
     int accentIndex = 0; // UI colour choice, saved with the session
+    bool advancedView = false; // UI: target and result curves, saved with the session
+    int hiddenCurves = 0;      // UI: bit mask of curves switched off in the advanced legend
     juce::AudioProcessorValueTreeState params;
 
 private:
