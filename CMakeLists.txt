@@ -53,11 +53,19 @@ if(BTEQ_BUILD_PLUGIN)
       ${CMAKE_SOURCE_DIR}/data/headphones.tsv ${BTEQ_LIBRARY_GZ}
     DEPENDS ${CMAKE_SOURCE_DIR}/data/headphones.tsv ${CMAKE_SOURCE_DIR}/tools/gzip_file.py
     COMMENT "Compressing headphone library")
-  add_custom_target(bteq_library_gz DEPENDS ${BTEQ_LIBRARY_GZ})
+  set(BTEQ_CURVES_GZ ${CMAKE_BINARY_DIR}/curves.tsv.gz)
+  add_custom_command(
+    OUTPUT ${BTEQ_CURVES_GZ}
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/gzip_file.py
+      ${CMAKE_SOURCE_DIR}/data/curves.tsv ${BTEQ_CURVES_GZ}
+    DEPENDS ${CMAKE_SOURCE_DIR}/data/curves.tsv ${CMAKE_SOURCE_DIR}/tools/gzip_file.py
+    COMMENT "Compressing measurement and target curves")
+  add_custom_target(bteq_library_gz DEPENDS ${BTEQ_LIBRARY_GZ} ${BTEQ_CURVES_GZ})
 
   juce_add_binary_data(BteqData
     SOURCES
       ${BTEQ_LIBRARY_GZ}
+      ${BTEQ_CURVES_GZ}
       resources/forest.png
       resources/fonts/PirataOne-Regular.ttf
       resources/fonts/BarlowCondensed-SemiBold.ttf

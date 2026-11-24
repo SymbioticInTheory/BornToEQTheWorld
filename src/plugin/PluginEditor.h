@@ -52,8 +52,10 @@ private:
 // (frequency and gain), and scrolling over a point changes its Q.
 class ResponseGraph : public juce::Component {
 public:
-    ResponseGraph(BteqProcessor& p, const Theme& t) : proc(p), theme(t) {}
+    ResponseGraph(BteqProcessor& p, const Theme& t);
     void paint(juce::Graphics&) override;
+    void resized() override;
+    void setAdvanced(bool on);
     void mouseMove(const juce::MouseEvent&) override;
     void mouseDown(const juce::MouseEvent&) override;
     void mouseDrag(const juce::MouseEvent&) override;
@@ -67,9 +69,16 @@ private:
     float yOf(double db) const;
     juce::Point<float> nodePosition(const bteq::FilterSpec& f, double k) const;
     int nodeAt(juce::Point<float> pos) const;
+    double rangeDb() const { return proc.advancedView ? 18.0 : 12.0; }
+    void paintAdvanced(juce::Graphics&, const bteq::HeadphoneProfile&, double k, juce::Colour curveColour);
+    void paintEq(juce::Graphics&, double k, juce::Colour colour, float width, bool nodes);
     int dragIndex = -1;
     BteqProcessor& proc;
     const Theme& theme;
+    juce::TextButton advancedButton { "Advanced" };
+    std::unique_ptr<juce::SharedResourcePointer<CurvesHolder>> curves; // loaded on first use
+    enum Curve { Target, Measured, Corrected, Eq, numCurves };
+    std::array<juce::Rectangle<float>, numCurves> legendHit;
 };
 
 // Filter cards. Each value is a label you can click and type into.
