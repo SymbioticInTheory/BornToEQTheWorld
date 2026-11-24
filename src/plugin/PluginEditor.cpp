@@ -44,6 +44,19 @@ juce::String formatFreq(double f) {
 }
 
 juce::String formatDb(double db) { return (db > 0.05 ? "+" : "") + juce::String(db, 1) + " dB"; }
+
+juce::String formatQ(double q) { return "Q " + juce::String(q, 2).trimCharactersAtEnd("0").trimCharactersAtEnd("."); }
+
+// Reads what someone typed: "1.2k", "1200 Hz", "+3.5 dB", "Q 0.7". Returns NaN if there is no number.
+double parseTyped(const juce::String& typed, bool allowKilo) {
+    const auto t = typed.trim().toLowerCase();
+    const auto digits = t.retainCharacters("0123456789.-");
+    if (!digits.containsAnyOf("0123456789")) return std::numeric_limits<double>::quiet_NaN();
+    const double v = digits.getDoubleValue();
+    return allowKilo && t.containsChar('k') ? v * 1000.0 : v;
+}
+
+double roundFreq(double f) { return f < 1000 ? std::round(f) : std::round(f / 10.0) * 10.0; }
 } // namespace
 
 // ===========================================================================
@@ -55,6 +68,16 @@ BteqLookAndFeel::BteqLookAndFeel(const Theme& t) : accentColour(Theme::accent(0)
     setColour(juce::CaretComponent::caretColourId, Theme::textBright);
     setColour(juce::ListBox::backgroundColourId, juce::Colours::transparentBlack);
     setColour(juce::ListBox::outlineColourId, juce::Colours::transparentBlack);
+    setColour(juce::PopupMenu::backgroundColourId, juce::Colour(0xf2141517));
+    setColour(juce::PopupMenu::textColourId, Theme::text);
+    setColour(juce::PopupMenu::headerTextColourId, Theme::muted);
+    setColour(juce::PopupMenu::highlightedBackgroundColourId, juce::Colour(0xff2A2C30));
+    setColour(juce::PopupMenu::highlightedTextColourId, Theme::textBright);
+    setColour(juce::Label::textWhenEditingColourId, Theme::textBright);
+    setColour(juce::TextEditor::backgroundColourId, Theme::field);
+    setColour(juce::AlertWindow::backgroundColourId, juce::Colour(0xff141517));
+    setColour(juce::AlertWindow::textColourId, Theme::text);
+    setColour(juce::AlertWindow::outlineColourId, juce::Colour(0x29ffffff));
 }
 
 void BteqLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, const juce::Colour&, bool over, bool) {
@@ -80,6 +103,13 @@ void BteqLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, c
         }
         return;
     }
+    if (kind == "dropdown") {
+        g.setColour(over ? juce::Colour(0xcc101113) : Theme::field);
+        g.fillRoundedRectangle(r, 8.0f);
+        g.setColour(juce::Colour(0x29ffffff));
+        g.drawRoundedRectangle(r.reduced(0.5f), 8.0f, 1.0f);
+        return;
+    }
     // Bypass and anything else.
     const bool on = b.getToggleState();
     g.setColour(on ? juce::Colour(0xb3781e18) : Theme::panel);
@@ -88,9 +118,31 @@ void BteqLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, c
     g.drawRoundedRectangle(r.reduced(0.5f), 8.0f, 1.0f);
 }
 
+juce::Font BteqLookAndFeel::getPopupMenuFont() { return theme.bodyFont(15.0f); }
+
 void BteqLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& b, bool, bool) {
     const auto kind = b.getProperties()["kind"].toString();
     if (kind == "swatch") return;
+    if (kind == "dropdown") {
+        auto r = b.getLocalBounds().reduced(12, 0);
+        const auto chev = r.removeFromRight(12).toFloat();
+        juce::Path p;
+        p.startNewSubPath(chev.getX(), chev.getCentreY() - 2.5f);
+        p.lineTo(chev.getCentreX(), chev.getCentreY() + 2.5f);
+        p.lineTo(chev.getRight(), chev.getCentreY() - 2.5f);
+        g.setColour(Theme::muted);
+        g.strokePath(p, juce::PathStrokeType(1.6f));
+        g.setColour(b.getProperties()["placeholder"] ? Theme::muted : Theme::text);
+        g.setFont(theme.bodyFont(14.0f, true));
+        g.drawText(b.getButtonText(), r.withTrimmedRight(6), juce::Justification::centredLeft, true);
+        return;
+    }
+    if (kind == "small") {
+        g.setColour(Theme::text);
+        g.setFont(theme.labelFont(13.0f));
+        g.drawText(b.getButtonText().toUpperCase(), b.getLocalBounds(), juce::Justification::centred);
+        return;
+    }
     juce::Colour c = Theme::text;
     if (kind == "tab") c = b.getToggleState() ? juce::Colour(0xff0B0C0D) : Theme::soft;
     if (kind == "bypass" && b.getToggleState()) c = juce::Colour(0xffFFB5A6);
@@ -185,17 +237,17 @@ void ResponseGraph::paint(juce::Graphics& g) {
     juce::Path curve;
     const int points = 300;
     if (proc.graphicModeActive()) {
+        // Shown without the preamp, the same way as the parametric curve.
         const auto& freqs = proc.library().graphicFrequencies();
-        const std::vector<double> raw(p->graphicGainsDb.begin(), p->graphicGainsDb.end());
-        const auto gains = bteq::scaleGraphicGains(raw, k);
-        const double offset = p->hasParametric ? -p->parametric.preampDb * k : 0.0; // show it like the parametric curve
+        auto gains = proc.graphicShapeDb();
+        for (auto& gn : gains) gn *= k;
         for (size_t i = 0; i < freqs.size(); i += 4) {
             g.setColour(curveColour.withAlpha(0.35f));
-            g.drawLine(xOf(freqs[i]), yOf(0), xOf(freqs[i]), yOf(gains[i] + offset), 5.0f);
+            g.drawLine(xOf(freqs[i]), yOf(0), xOf(freqs[i]), yOf(gains[i]), 5.0f);
         }
         for (int i = 0; i <= points; ++i) {
             const double f = 20.0 * std::pow(1000.0, i / (double)points);
-            const float x = xOf(f), y = yOf(bteq::graphicGainAt(freqs, gains, f) + offset);
+            const float x = xOf(f), y = yOf(bteq::graphicGainAt(freqs, gains, f));
             i == 0 ? curve.startNewSubPath(x, y) : curve.lineTo(x, y);
         }
         g.setColour(curveColour);
@@ -203,8 +255,9 @@ void ResponseGraph::paint(juce::Graphics& g) {
         return;
     }
 
+    const auto preset = proc.effectiveParametric();
     std::vector<bteq::BiquadCoeffs> coeffs;
-    for (const auto& f : p->parametric.filters)
+    for (const auto& f : preset.filters)
         if (f.enabled) coeffs.push_back(bteq::BiquadCoeffs::make(f.type, f.fc, f.gainDb * k, f.q, 48000.0));
     for (int i = 0; i <= points; ++i) {
         const double f = 20.0 * std::pow(1000.0, i / (double)points);
@@ -218,10 +271,11 @@ void ResponseGraph::paint(juce::Graphics& g) {
 
     int num = 1;
     g.setFont(theme.labelFont(12.0f));
-    for (const auto& f : p->parametric.filters) {
+    for (const auto& f : preset.filters) {
         if (f.type == bteq::FilterType::LowPass) { ++num; continue; }
-        const float x = juce::jmax(a.getX() + 9.0f, xOf(f.fc)), y = yOf(f.gainDb * k);
-        g.setColour(juce::Colour(0xff0B0C0D));
+        const auto pos = nodePosition(f, k);
+        const float x = pos.x, y = pos.y;
+        g.setColour(num - 1 == dragIndex ? curveColour.withAlpha(0.45f) : juce::Colour(0xff0B0C0D));
         g.fillEllipse(x - 9, y - 9, 18, 18);
         g.setColour(curveColour);
         g.drawEllipse(x - 9, y - 9, 18, 18, 2.0f);
@@ -230,12 +284,132 @@ void ResponseGraph::paint(juce::Graphics& g) {
     }
 }
 
+juce::Point<float> ResponseGraph::nodePosition(const bteq::FilterSpec& f, double k) const {
+    return { juce::jmax(plotArea().getX() + 9.0f, xOf(f.fc)), yOf(f.gainDb * k) };
+}
+
+int ResponseGraph::nodeAt(juce::Point<float> pos) const {
+    if (proc.selectedProfile() == nullptr || proc.graphicModeActive()) return -1;
+    const auto preset = proc.effectiveParametric();
+    const double k = proc.amount();
+    int best = -1;
+    float bestDist = 12.0f;
+    for (int i = 0; i < (int)preset.filters.size(); ++i) {
+        const auto& f = preset.filters[(size_t)i];
+        if (f.type == bteq::FilterType::LowPass) continue;
+        const float d = nodePosition(f, k).getDistanceFrom(pos);
+        if (d < bestDist) { bestDist = d; best = i; }
+    }
+    return best;
+}
+
+void ResponseGraph::mouseMove(const juce::MouseEvent& e) {
+    setMouseCursor(nodeAt(e.position) >= 0 ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
+}
+
+void ResponseGraph::mouseDown(const juce::MouseEvent& e) { dragIndex = nodeAt(e.position); repaint(); }
+
+void ResponseGraph::mouseDrag(const juce::MouseEvent& e) {
+    if (dragIndex < 0) return;
+    const auto preset = proc.effectiveParametric();
+    if (dragIndex >= (int)preset.filters.size()) return;
+    auto f = preset.filters[(size_t)dragIndex];
+    const auto a = plotArea();
+    const double x = juce::jlimit(0.0, 1.0, (double)((e.position.x - a.getX()) / a.getWidth()));
+    f.fc = roundFreq(20.0 * std::pow(1000.0, x));
+    const double k = proc.amount();
+    if (k > 0.01) {
+        const double db = (a.getCentreY() - e.position.y) / (a.getHeight() * 0.5) * 12.0;
+        f.gainDb = juce::jlimit(-20.0, 20.0, std::round(db / k * 10.0) / 10.0);
+    }
+    proc.setFilter(dragIndex, f);
+    repaint();
+}
+
+void ResponseGraph::mouseUp(const juce::MouseEvent&) { dragIndex = -1; repaint(); }
+
+void ResponseGraph::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& w) {
+    const int i = nodeAt(e.position);
+    if (i < 0 || w.deltaY == 0.0f) return;
+    auto f = proc.effectiveParametric().filters[(size_t)i];
+    f.q = juce::jlimit(0.1, 20.0, std::round(f.q * (w.deltaY > 0 ? 1.1 : 1.0 / 1.1) * 100.0) / 100.0);
+    proc.setFilter(i, f);
+    repaint();
+}
+
 // ===========================================================================
 // Filters panel
 // ===========================================================================
+FiltersPanel::FiltersPanel(BteqProcessor& p, const Theme& t) : proc(p), theme(t) {
+    for (int i = 0; i < maxCards; ++i)
+        for (int fi = 0; fi < numFields; ++fi) {
+            auto& l = values[(size_t)i][(size_t)fi];
+            l.setFont(fi == Freq ? theme.bodyFont(14.0f, true) : theme.bodyFont(13.0f));
+            l.setColour(juce::Label::textColourId, fi == Freq ? Theme::text : juce::Colour(0xffB2AFA9));
+            l.setBorderSize({ 0, 0, 0, 0 });
+            l.setMinimumHorizontalScale(1.0f);
+            l.setEditable(true, false, false);
+            l.setMouseCursor(juce::MouseCursor::IBeamCursor);
+            l.setTitle("Filter " + juce::String(i + 1) + (fi == Freq ? " frequency" : fi == Gain ? " gain" : " Q"));
+            l.onTextChange = [this, i, fi, &l] { commit(i, (Field)fi, l.getText()); };
+            addChildComponent(l);
+        }
+}
+
+juce::Rectangle<int> FiltersPanel::cardBounds(int i) const {
+    const int cols = 5, gap = 8, ch = 76;
+    const int cw = (getWidth() - gap * (cols - 1)) / cols;
+    return { (i % cols) * (cw + gap), (i / cols) * (ch + gap), cw, ch };
+}
+
+void FiltersPanel::resized() {
+    for (int i = 0; i < maxCards; ++i) {
+        auto r = cardBounds(i).reduced(9, 6);
+        r.removeFromTop(16);
+        values[(size_t)i][Freq].setBounds(r.removeFromTop(19));
+        values[(size_t)i][Gain].setBounds(r.removeFromTop(16));
+        values[(size_t)i][Q].setBounds(r.removeFromTop(16));
+    }
+}
+
+void FiltersPanel::refresh() {
+    const auto* p = proc.selectedProfile();
+    const bool show = p != nullptr && !proc.graphicModeActive();
+    const auto preset = proc.effectiveParametric();
+    for (int i = 0; i < maxCards; ++i) {
+        const bool has = show && i < (int)preset.filters.size();
+        for (int fi = 0; fi < numFields; ++fi) {
+            auto& l = values[(size_t)i][(size_t)fi];
+            l.setVisible(has);
+            if (!has || l.isBeingEdited()) continue;
+            const auto& f = preset.filters[(size_t)i];
+            const bool lowPass = f.type == bteq::FilterType::LowPass;
+            const juce::String text = fi == Freq ? formatFreq(f.fc)
+                                    : fi == Gain ? (lowPass ? juce::String("12 dB/oct") : formatDb(f.gainDb))
+                                                 : formatQ(f.q);
+            if (l.getText() != text) l.setText(text, juce::dontSendNotification);
+            l.setEditable(!(lowPass && fi == Gain), false, false);
+        }
+    }
+}
+
+void FiltersPanel::commit(int card, Field field, const juce::String& text) {
+    auto filters = proc.effectiveParametric().filters;
+    if (card >= (int)filters.size()) return;
+    auto f = filters[(size_t)card];
+    const double v = parseTyped(text, field == Freq);
+    if (!std::isnan(v)) {
+        if (field == Freq) f.fc = juce::jlimit(10.0, 22000.0, v);
+        if (field == Gain) f.gainDb = juce::jlimit(-30.0, 30.0, v);
+        if (field == Q) f.q = juce::jlimit(0.05, 30.0, v);
+        proc.setFilter(card, f);
+    }
+    refresh();
+    getParentComponent()->repaint();
+}
+
 void FiltersPanel::paint(juce::Graphics& g) {
     const auto* p = proc.selectedProfile();
-    const double k = proc.amount();
     if (p == nullptr) {
         g.setColour(Theme::soft);
         g.setFont(theme.bodyFont(14.0f));
@@ -253,21 +427,18 @@ void FiltersPanel::paint(juce::Graphics& g) {
         g.drawFittedText("The same curve Wavelet and Equalizer APO's GraphicEQ use, applied as a minimum-phase "
                          "filter exactly like Equalizer APO. Bars show every fourth point.",
                          r.removeFromTop(60), juce::Justification::topLeft, 3);
-        const std::vector<double> raw(p->graphicGainsDb.begin(), p->graphicGainsDb.end());
-        const auto gains = bteq::scaleGraphicGains(raw, k);
-        const auto [lo, hi] = std::minmax_element(gains.begin(), gains.end());
         g.setColour(Theme::text);
-        g.drawText("Range " + juce::String(*lo, 1) + " to " + juce::String(*hi, 1) + " dB (headroom built in)",
-                   r.removeFromTop(22), juce::Justification::centredLeft);
+        g.drawFittedText("The graph shows the curve without the preamp, like Parametric. "
+                         "Change the preamp on the right; it is kept separately for each target.",
+                         r.removeFromTop(44), juce::Justification::topLeft, 2);
         return;
     }
 
-    const auto& fs = p->parametric.filters;
-    const int cols = 5, gap = 8;
-    const int cw = (getWidth() - gap * (cols - 1)) / cols, ch = 76;
-    for (int i = 0; i < (int)fs.size() && i < 10; ++i) {
+    const auto preset = proc.effectiveParametric();
+    const auto& fs = preset.filters;
+    for (int i = 0; i < (int)fs.size() && i < maxCards; ++i) {
         const auto& f = fs[(size_t)i];
-        juce::Rectangle<float> card((float)((i % cols) * (cw + gap)), (float)((i / cols) * (ch + gap)), (float)cw, (float)ch);
+        const auto card = cardBounds(i).toFloat();
         g.setColour(juce::Colour(0x99060708));
         g.fillRoundedRectangle(card, 8.0f);
         g.setColour(juce::Colour(0x14ffffff));
@@ -282,24 +453,13 @@ void FiltersPanel::paint(juce::Graphics& g) {
         g.drawText(juce::String(i + 1), top.removeFromLeft(16), juce::Justification::centredLeft);
         g.setFont(theme.condFont(13.0f));
         g.drawText(type, top, juce::Justification::centredRight);
-        g.setColour(Theme::text);
-        g.setFont(theme.bodyFont(14.0f, true));
-        g.drawText(formatFreq(f.fc), r.removeFromTop(19), juce::Justification::centredLeft);
-        g.setColour(juce::Colour(0xffB2AFA9));
-        g.setFont(theme.bodyFont(13.0f));
-        if (f.type == bteq::FilterType::LowPass) {
-            g.drawText("12 dB/oct", r.removeFromTop(16), juce::Justification::centredLeft);
-        } else {
-            g.drawText(formatDb(f.gainDb * k), r.removeFromTop(16), juce::Justification::centredLeft);
-            g.drawText("Q " + juce::String(f.q), r.removeFromTop(16), juce::Justification::centredLeft);
-        }
     }
-    if (fs.size() > 10) {
-        g.setColour(Theme::muted);
-        g.setFont(theme.bodyFont(12.0f));
-        g.drawText("+" + juce::String((int)fs.size() - 10) + " more filters", getLocalBounds().removeFromBottom(16),
-                   juce::Justification::centredRight);
-    }
+    auto footer = getLocalBounds().removeFromBottom(20);
+    g.setColour(Theme::muted);
+    g.setFont(theme.bodyFont(12.0f));
+    juce::String hint = "Click a value to type, drag a point on the graph, scroll on a point for Q";
+    if (fs.size() > (size_t)maxCards) hint = "+" + juce::String((int)fs.size() - maxCards) + " more filters. " + hint;
+    g.drawText(hint, footer.withTrimmedRight(70), juce::Justification::centredLeft, true);
 }
 
 // ===========================================================================
@@ -359,6 +519,31 @@ BteqEditor::BteqEditor(BteqProcessor& p)
         addAndMakeVisible(s);
     }
 
+    preampValue.setFont(theme->bodyFont(13.0f));
+    preampValue.setColour(juce::Label::textColourId, Theme::text);
+    preampValue.setJustificationType(juce::Justification::centredRight);
+    preampValue.setBorderSize({ 0, 0, 0, 0 });
+    preampValue.setEditable(true, false, false);
+    preampValue.setMouseCursor(juce::MouseCursor::IBeamCursor);
+    preampValue.setTitle("Preamp");
+    preampValue.setTooltip("Click to type a preamp level");
+    preampValue.onTextChange = [this] {
+        const double v = parseTyped(preampValue.getText(), false);
+        if (!std::isnan(v)) proc.setPreamp(v);
+        refreshEditing();
+    };
+    addAndMakeVisible(preampValue);
+
+    resetButton.getProperties().set("kind", "small");
+    resetButton.setTooltip("Go back to the published settings for this target");
+    resetButton.onClick = [this] { proc.resetEdits(); refreshEditing(); repaint(); };
+    addChildComponent(resetButton);
+
+    savedButton.getProperties().set("kind", "dropdown");
+    savedButton.setTitle("Saved profiles");
+    savedButton.onClick = [this] { showSavedMenu(); };
+    addAndMakeVisible(savedButton);
+
     setAccent(proc.accentIndex);
     setSize(1080, 680);
 
@@ -366,6 +551,7 @@ BteqEditor::BteqEditor(BteqProcessor& p)
     if (proc.selectedHeadphone().isNotEmpty()) search.setText(proc.selectedHeadphone(), false);
     refreshHeadphones();
     refreshTargets();
+    refreshEditing();
     startTimerHz(15);
 }
 
@@ -422,6 +608,7 @@ void BteqEditor::timerCallback() {
     graphicTab.setToggleState(graphic, juce::dontSendNotification);
     bypassButton.setButtonText(bypassButton.getToggleState() ? "Bypassed" : "Bypass");
 
+    refreshEditing();
     graph.repaint();
     filters.repaint();
     repaint(kCorrectionPanel.withHeight(40));
@@ -485,9 +672,11 @@ void BteqEditor::paint(juce::Graphics& g) {
     juce::String note;
     if (p != nullptr) {
         if (proc.graphicModeActive()) note = "Wavelet-style 127-point curve";
-        else if (p->originalPreset) note = juce::String((int)p->parametric.filters.size()) + " filters, exactly as " + juce::String(p->source) + " published them";
+        else if (p->originalPreset && !proc.selectionEdited()) note = juce::String((int)p->parametric.filters.size()) + " filters, exactly as " + juce::String(p->source) + " published them";
+        else if (p->originalPreset) note = juce::String((int)p->parametric.filters.size()) + " filters from " + juce::String(p->source);
         else note = juce::String((int)p->parametric.filters.size()) + " filters from AutoEQ";
         if (!proc.graphicAvailable() && p->hasParametric) note << " (no graphic version)";
+        if (proc.selectionEdited()) note << ", edited by you";
     }
     g.drawText(note, kTabsPanel.getRight() + 14, kTabsPanel.getY(), kGraphPanel.getRight() - kTabsPanel.getRight() - 14,
                kTabsPanel.getHeight(), juce::Justification::centredRight);
@@ -506,10 +695,8 @@ void BteqEditor::paint(juce::Graphics& g) {
     g.drawText("Full", sl.getRight() - 40, sl.getBottom() + 2, 40, 14, juce::Justification::centredRight);
     g.setFont(theme->bodyFont(13.0f));
     g.setColour(juce::Colour(0xffB2AFA9));
-    g.drawText("Preamp", kCorrectionPanel.getX() + 14, kCorrectionPanel.getY() + 104, 100, 20, juce::Justification::centredLeft);
-    g.setColour(Theme::text);
-    g.drawText(formatDb(pre), kCorrectionPanel.getRight() - 114, kCorrectionPanel.getY() + 104, 100, 20,
-               juce::Justification::centredRight);
+    g.drawText(proc.selectionEdited() ? "Preamp at 100% (edited)" : "Preamp at 100%", kCorrectionPanel.getX() + 14,
+               kCorrectionPanel.getY() + 104, 150, 20, juce::Justification::centredLeft);
     g.setColour(juce::Colour(0x14ffffff));
     g.drawHorizontalLine(kCorrectionPanel.getBottom() - 54, (float)kCorrectionPanel.getX() + 14, (float)kCorrectionPanel.getRight() - 14);
 
@@ -532,9 +719,160 @@ void BteqEditor::resized() {
     graph.setBounds(kGraphPanel.reduced(12, 8));
     filters.setBounds(kFiltersPanel.reduced(12));
     correction.setBounds(kCorrectionPanel.getX() + 12, kCorrectionPanel.getY() + 58, kCorrectionPanel.getWidth() - 24, 26);
+    preampValue.setBounds(kCorrectionPanel.getRight() - 94, kCorrectionPanel.getY() + 104, 80, 20);
+    resetButton.setBounds(kFiltersPanel.getRight() - 12 - 64, kFiltersPanel.getBottom() - 12 - 20, 64, 22);
+    savedButton.setBounds(462, 18, 210, 36);
     for (int i = 0; i < Theme::numAccents; ++i)
         swatches[(size_t)i].setBounds(kCorrectionPanel.getRight() - 14 - (Theme::numAccents - i) * 36 + 2,
                                       kCorrectionPanel.getBottom() - 46, 34, 34);
+}
+
+// Editing ---------------------------------------------------------------------
+void BteqEditor::refreshEditing() {
+    filters.refresh();
+    const auto* p = proc.selectedProfile();
+    preampValue.setVisible(p != nullptr);
+    if (!preampValue.isBeingEdited()) {
+        const auto text = formatDb(proc.preampSettingDb());
+        if (preampValue.getText() != text) preampValue.setText(text, juce::dontSendNotification);
+    }
+    resetButton.setVisible(proc.selectionEdited());
+
+    // Saved profiles dropdown: show the saved name until the selection changes.
+    const auto selection = proc.selectedHeadphone() + "|" + juce::String(proc.selectedProfileIndex());
+    if (loadedSavedName.isNotEmpty() && selection != loadedSavedSelection) loadedSavedName.clear();
+    const auto label = loadedSavedName.isNotEmpty() ? loadedSavedName : juce::String("Saved profiles");
+    if (savedButton.getButtonText() != label) {
+        savedButton.setButtonText(label);
+        savedButton.getProperties().set("placeholder", loadedSavedName.isEmpty());
+        savedButton.repaint();
+    }
+}
+
+// Saved profiles ----------------------------------------------------------------
+// Kept in one file shared by every instance and session:
+// %APPDATA%\Born To EQ The World\saved-profiles.xml on Windows.
+juce::File BteqEditor::savedProfilesFile() {
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("Born To EQ The World")
+        .getChildFile("saved-profiles.xml");
+}
+
+juce::ValueTree BteqEditor::loadSavedProfiles() {
+    if (auto xml = juce::XmlDocument::parse(savedProfilesFile()))
+        if (xml->hasTagName("SAVED")) return juce::ValueTree::fromXml(*xml);
+    return juce::ValueTree("SAVED");
+}
+
+void BteqEditor::storeSavedProfiles(const juce::ValueTree& saved) {
+    const auto file = savedProfilesFile();
+    file.getParentDirectory().createDirectory();
+    if (auto xml = saved.createXml()) xml->writeTo(file);
+}
+
+void BteqEditor::askForName(const juce::String& title, const juce::String& initial, std::function<void(juce::String)> done) {
+    nameWindow = std::make_unique<juce::AlertWindow>(title, "", juce::MessageBoxIconType::NoIcon, this);
+    nameWindow->setLookAndFeel(&lnf);
+    nameWindow->addTextEditor("name", initial, "Name");
+    nameWindow->addButton("Save", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    nameWindow->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    if (auto* te = nameWindow->getTextEditor("name")) te->setFont(theme->bodyFont(16.0f));
+    juce::Component::SafePointer<BteqEditor> safe(this);
+    nameWindow->enterModalState(true, juce::ModalCallbackFunction::create([safe, done](int result) {
+        if (safe == nullptr) return;
+        const auto name = safe->nameWindow->getTextEditorContents("name").trim();
+        safe->nameWindow.reset();
+        if (result == 1 && name.isNotEmpty()) done(name);
+    }));
+    if (auto* te = nameWindow->getTextEditor("name")) {
+        te->grabKeyboardFocus();
+        te->selectAll();
+    }
+}
+
+void BteqEditor::showSavedMenu() {
+    auto saved = loadSavedProfiles();
+    const bool canSave = proc.selectedProfile() != nullptr;
+    enum { kSaveNew = 1, kUpdate = 2, kLoad = 100, kRename = 1000, kDelete = 2000 };
+
+    juce::PopupMenu menu, renameMenu, deleteMenu;
+    if (saved.getNumChildren() == 0) menu.addItem(3, "Nothing saved yet", false);
+    for (int i = 0; i < saved.getNumChildren(); ++i) {
+        const auto name = saved.getChild(i).getProperty("name").toString();
+        menu.addItem(kLoad + i, name, true, name == loadedSavedName);
+        renameMenu.addItem(kRename + i, name);
+        deleteMenu.addItem(kDelete + i, name);
+    }
+    menu.addSeparator();
+    menu.addItem(kSaveNew, "Save current as new...", canSave);
+    if (loadedSavedName.isNotEmpty()) menu.addItem(kUpdate, "Update \"" + loadedSavedName + "\" with current settings", canSave);
+    if (saved.getNumChildren() > 0) {
+        menu.addSubMenu("Rename", renameMenu);
+        menu.addSubMenu("Delete", deleteMenu);
+    }
+
+    juce::Component::SafePointer<BteqEditor> safe(this);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&savedButton).withMinimumWidth(savedButton.getWidth()),
+                       [safe, saved](int id) mutable {
+        if (safe == nullptr || id <= 0) return;
+        auto& ed = *safe;
+        auto remember = [safe](const juce::String& name) {
+            if (safe == nullptr) return;
+            safe->loadedSavedName = name;
+            safe->loadedSavedSelection = safe->proc.selectedHeadphone() + "|" + juce::String(safe->proc.selectedProfileIndex());
+            safe->refreshEditing();
+        };
+        auto snapshotNamed = [proc = &ed.proc](const juce::String& name) {
+            auto t = proc->makeSnapshot().createCopy();
+            t.setProperty("name", name, nullptr);
+            return t;
+        };
+        if (id >= kDelete) {
+            const auto name = saved.getChild(id - kDelete).getProperty("name").toString();
+            saved.removeChild(id - kDelete, nullptr);
+            storeSavedProfiles(saved);
+            if (name == ed.loadedSavedName) ed.loadedSavedName.clear();
+            ed.refreshEditing();
+        } else if (id >= kRename) {
+            const auto old = saved.getChild(id - kRename).getProperty("name").toString();
+            ed.askForName("Rename saved profile", old, [safe, old](juce::String name) {
+                if (safe == nullptr) return;
+                auto fresh = loadSavedProfiles();
+                for (auto child : fresh)
+                    if (child.getProperty("name").toString() == old) { child.setProperty("name", name, nullptr); break; }
+                storeSavedProfiles(fresh);
+                if (safe->loadedSavedName == old) safe->loadedSavedName = name;
+                safe->refreshEditing();
+            });
+        } else if (id >= kLoad) {
+            const auto t = saved.getChild(id - kLoad);
+            ed.proc.loadSnapshot(t);
+            ed.search.setText(ed.proc.selectedHeadphone(), false);
+            ed.refreshHeadphones();
+            ed.refreshTargets();
+            remember(t.getProperty("name").toString());
+            ed.repaint();
+        } else if (id == kUpdate) {
+            for (int i = 0; i < saved.getNumChildren(); ++i)
+                if (saved.getChild(i).getProperty("name").toString() == ed.loadedSavedName) {
+                    saved.removeChild(i, nullptr);
+                    saved.addChild(snapshotNamed(ed.loadedSavedName), i, nullptr);
+                    break;
+                }
+            storeSavedProfiles(saved);
+            remember(ed.loadedSavedName);
+        } else if (id == kSaveNew) {
+            const auto* p = ed.proc.selectedProfile();
+            const juce::String suggestion = p ? ed.proc.selectedHeadphone() + ", " + juce::String(p->target) : juce::String();
+            ed.askForName("Save profile", suggestion, [safe, snapshotNamed, remember](juce::String name) {
+                if (safe == nullptr) return;
+                auto fresh = loadSavedProfiles();
+                fresh.appendChild(snapshotNamed(name), nullptr);
+                storeSavedProfiles(fresh);
+                remember(name);
+            });
+        }
+    });
 }
 
 // List models -----------------------------------------------------------------
