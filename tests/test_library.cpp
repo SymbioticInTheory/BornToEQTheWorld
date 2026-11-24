@@ -90,6 +90,18 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Extra targets computed with AutoEQ's optimiser are listed for the same source.
+    for (const char* t : {"Harman over-ear 2018", "Harman over-ear 2018 without bass",
+                          "oratory1990 Optimum HiFi", "Diffuse field (GRAS KEMAR)"}) {
+        bool has = false;
+        for (size_t h : lib.search("Sennheiser HD 650"))
+            for (const auto* pr : lib.profilesFor(h))
+                if (pr->name == "Sennheiser HD 650" && pr->source == "oratory1990" && !pr->originalPreset &&
+                    pr->target == t)
+                    has = true;
+        if (!has) { std::printf("missing target %s\n", t); ++failures; }
+    }
+
     // Every profile must produce a stable, finite filter chain at common sample rates.
     size_t lowPass = 0;
     for (size_t h = 0; h < lib.numHeadphones(); ++h)

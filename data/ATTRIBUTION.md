@@ -5,6 +5,8 @@
 - **AutoEQ** by Jaakko Pasanen, https://github.com/jaakkopasanen/AutoEq (MIT licence).
   Profiles with origin `A` are AutoEQ's published results, computed from each
   source's measurements (oratory1990, crinacle, Rtings and others).
+  Extra-target profiles (also origin `A`) were computed by
+  `tools/compute_targets.py` with AutoEQ's own code and target curves.
 - **oratory1990's own EQ presets**, as transcribed from his PDFs by the OPRA
   project, https://github.com/opra-project/OPRA (data licensed CC BY-SA 4.0).
   Profiles with origin `O` are his presets exactly as published, with no

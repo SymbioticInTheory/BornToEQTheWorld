@@ -9,8 +9,10 @@ Inputs:
     holds oratory1990's own hand-made presets transcribed from his PDFs:
         curl -O https://raw.githubusercontent.com/opra-project/OPRA/main/dist/database_v1.jsonl
 
+  * optionally, extra-target profiles from tools/compute_targets.py.
+
 Usage:
-    python tools/build_library.py autoeq database_v1.jsonl data/headphones.tsv
+    python tools/build_library.py autoeq database_v1.jsonl data/headphones.tsv [--extra extra_results]
 
 Output format (UTF-8, tab separated, one profile per line):
     BTEQLIB <version> <autoeq commit> <opra entry count>
@@ -30,12 +32,13 @@ import sys
 import urllib.parse
 from pathlib import Path
 
+from compute_targets import default_target
+
 FORMAT_VERSION = 2
 FORMS = ('over-ear', 'in-ear', 'earbud')
 TYPE_CODES = {'PK': 'P', 'LSC': 'L', 'HSC': 'H'}
 OPRA_TYPES = {'peak_dip': 'P', 'low_shelf': 'L', 'high_shelf': 'H', 'low_pass': 'W'}
 OPRA_FORMS = {'over_the_ear': 'over-ear', 'on_ear': 'over-ear', 'in_ear': 'in-ear', 'earbuds': 'earbud'}
-AUTOEQ_TARGET = 'AutoEQ default target'
 
 
 def parse_parametric(path):
@@ -130,7 +133,7 @@ def opra_oratory_presets(jsonl_path):
     return out
 
 
-def main(autoeq_dir, opra_path, out_path):
+def main(autoeq_dir, opra_path, out_path, extra_dir=None):
     autoeq = Path(autoeq_dir)
     results = autoeq / 'results'
     try:
@@ -141,29 +144,42 @@ def main(autoeq_dir, opra_path, out_path):
     rec = recommended_paths(autoeq)
 
     rows, freqs = [], None
-    for source_dir in sorted(p for p in results.iterdir() if p.is_dir()):
-        for rig_dir in sorted(p for p in source_dir.iterdir() if p.is_dir()):
-            rig, form = split_rig(rig_dir.name)
-            for model_dir in sorted(p for p in rig_dir.iterdir() if p.is_dir()):
-                name = model_dir.name
-                peq = model_dir / f'{name} ParametricEQ.txt'
-                geq = model_dir / f'{name} GraphicEQ.txt'
-                if not peq.exists() and not geq.exists():
-                    continue
-                preamp, parametric = parse_parametric(peq) if peq.exists() else (0.0, '')
-                graphic = ''
-                if geq.exists():
-                    f, graphic = parse_graphic(geq)
-                    if freqs is None:
-                        freqs = f
-                    elif f != freqs:
-                        raise ValueError(f'{geq}: GraphicEQ frequencies differ from the rest')
-                rel = model_dir.relative_to(results).as_posix()
-                for field in (name, source_dir.name, rig):
-                    if '\t' in field or '\n' in field:
-                        raise ValueError(f'bad characters in {field!r}')
-                rows.append((name, source_dir.name, rig, form, '1' if rel in rec else '0', 'A',
-                             AUTOEQ_TARGET, f'{preamp:g}', parametric, graphic))
+
+    def scan(root, target_for, mark_recommended):
+        nonlocal freqs
+        for source_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+            for rig_dir in sorted(p for p in source_dir.iterdir() if p.is_dir()):
+                rig, form = split_rig(rig_dir.name)
+                for model_dir in sorted(p for p in rig_dir.iterdir() if p.is_dir()):
+                    name = model_dir.name
+                    peq = model_dir / f'{name} ParametricEQ.txt'
+                    geq = model_dir / f'{name} GraphicEQ.txt'
+                    if not peq.exists() and not geq.exists():
+                        continue
+                    preamp, parametric = parse_parametric(peq) if peq.exists() else (0.0, '')
+                    graphic = ''
+                    if geq.exists():
+                        f, graphic = parse_graphic(geq)
+                        if freqs is None:
+                            freqs = f
+                        elif f != freqs:
+                            raise ValueError(f'{geq}: GraphicEQ frequencies differ from the rest')
+                    rel = model_dir.relative_to(root).as_posix()
+                    for field in (name, source_dir.name, rig):
+                        if '\t' in field or '\n' in field:
+                            raise ValueError(f'bad characters in {field!r}')
+                    recommended = '1' if mark_recommended and rel in rec else '0'
+                    rows.append((name, source_dir.name, rig, form, recommended, 'A',
+                                 target_for(source_dir.name, rig, form), f'{preamp:g}', parametric, graphic))
+
+    # AutoEQ's published results, labelled with the target AutoEQ used for each source.
+    scan(results, default_target, True)
+    published = len(rows)
+    # Extra targets computed by tools/compute_targets.py: <extra>/<target label>/<source>/...
+    if extra_dir:
+        for target_dir in sorted(p for p in Path(extra_dir).iterdir() if p.is_dir()):
+            scan(target_dir, lambda *_, t=target_dir.name: t, False)
+    extra = len(rows) - published
 
     # oratory1990's own presets: attach to the AutoEQ headphone with the same name
     # (ignoring case, spaces and punctuation), else add them as a new headphone.
@@ -180,8 +196,12 @@ def main(autoeq_dir, opra_path, out_path):
         rows.append((name, 'oratory1990', '', form, '0', 'O', target, f'{preamp:g}', parametric, ''))
 
     rows = list(dict.fromkeys(rows))  # OPRA lists some presets under two product ids
-    # Per headphone: oratory1990's own presets first, then AutoEQ's recommended source, then the rest.
-    rows.sort(key=lambda r: (r[0].casefold(), r[0], r[5] != 'O', r[4] != '1', r[1].casefold(), r[2], r[6]))
+    # Per headphone: oratory1990's own presets first, then AutoEQ's recommended source,
+    # then the other sources; within a source, the default target first.
+    rec_sources = {(r[0], r[1], r[2]) for r in rows if r[4] == '1'}
+    rows.sort(key=lambda r: (r[0].casefold(), r[0], r[5] != 'O', (r[0], r[1], r[2]) not in rec_sources,
+                             r[1].casefold(), r[2], r[4] != '1' and r[6] != default_target(r[1], r[2], r[3]),
+                             r[6]))
     os.makedirs(os.path.dirname(out_path) or '.', exist_ok=True)
     with open(out_path, 'w', encoding='utf-8', newline='\n') as f:
         f.write(f'BTEQLIB\t{FORMAT_VERSION}\t{commit}\t{len(opra)}\n')
@@ -189,11 +209,16 @@ def main(autoeq_dir, opra_path, out_path):
         for r in rows:
             f.write('\t'.join(r) + '\n')
     models = len({r[0] for r in rows})
-    print(f'{len(rows)} profiles for {models} headphones from AutoEQ {commit}; '
-          f'{len(opra)} oratory1990 presets ({matched} matched to AutoEQ names) -> {out_path}')
+    print(f'{len(rows)} profiles for {models} headphones from AutoEQ {commit}: {published} published, '
+          f'{extra} extra-target, {len(opra)} oratory1990 presets ({matched} matched to AutoEQ names) -> {out_path}')
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 4:
-        sys.exit(__doc__)
-    main(sys.argv[1], sys.argv[2], sys.argv[3])
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('autoeq')
+    ap.add_argument('opra_jsonl')
+    ap.add_argument('out')
+    ap.add_argument('--extra', help='output folder of tools/compute_targets.py')
+    a = ap.parse_args()
+    main(a.autoeq, a.opra_jsonl, a.out, a.extra)

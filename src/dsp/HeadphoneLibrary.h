@@ -26,7 +26,7 @@ struct HeadphoneProfile {
     // True when this is the source's own preset used exactly as published
     // (oratory1990's hand-made EQs); false when AutoEQ computed it from a measurement.
     bool originalPreset = false;
-    std::string target; // e.g. "Harman Target", "AutoEQ default target"
+    std::string target; // e.g. "Harman Target", "Harman over-ear 2018", "oratory1990 Optimum HiFi"
     bool hasParametric = false;
     ParametricPreset parametric;
     std::vector<float> graphicGainsDb; // matches HeadphoneLibrary::graphicFrequencies()
@@ -34,9 +34,10 @@ struct HeadphoneProfile {
     // Label for the source dropdown, e.g. "crinacle (GRAS 43AG-7)".
     std::string sourceLabel() const { return rig.empty() ? source : source + " (" + rig + ")"; }
 
-    // Full label, e.g. "oratory1990 preset: Harman Target" or "crinacle (GRAS 43AG-7) via AutoEQ".
+    // Full label, e.g. "oratory1990 preset: Harman Target" or
+    // "Rtings (HMS II.3) via AutoEQ: Harman over-ear 2018".
     std::string label() const {
-        return originalPreset ? sourceLabel() + " preset: " + target : sourceLabel() + " via AutoEQ";
+        return sourceLabel() + (originalPreset ? " preset: " : " via AutoEQ: ") + target;
     }
 };
 

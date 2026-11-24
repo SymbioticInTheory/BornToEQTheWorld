@@ -15,13 +15,18 @@ Step 1 (DSP core) is done. Step 2 (headphone library) is in progress.
   filter chain with preamp, correction amount (0 to 100%) and auto preamp.
 - `tests/compare_with_autoeq.py`: renders an impulse through the C++ core and
   compares it with AutoEQ's own filter maths at 44.1 to 192 kHz.
-- `data/headphones.tsv`: about 10,000 profiles for 6,200 headphones. For each
+- `data/headphones.tsv`: about 27,000 profiles for 6,200 headphones. For each
   headphone you get oratory1990's own presets (used exactly as he published
-  them) and AutoEQ's results for every measurement source, with both
-  parametric and 127-point GraphicEQ (Wavelet-style) curves.
+  them), AutoEQ's published results for every measurement source, and extra
+  targets computed with AutoEQ's optimiser (Harman with and without bass,
+  oratory1990 Optimum HiFi, diffuse field and more). Each has parametric and
+  127-point GraphicEQ (Wavelet-style) curves.
 - `src/dsp/HeadphoneLibrary.h`: loads that file, searches headphones by name
   ("hd650" finds "Sennheiser HD 650") and lists each headphone's profiles.
-- `tools/build_library.py`: regenerates the library from AutoEQ and OPRA.
+- `tools/compute_targets.py`: reruns AutoEQ on the raw measurements for the
+  extra targets, with the same settings AutoEQ uses for its published results.
+- `tools/build_library.py`: regenerates the library from AutoEQ, OPRA and the
+  extra-target results.
 
 ## Build and test
 
