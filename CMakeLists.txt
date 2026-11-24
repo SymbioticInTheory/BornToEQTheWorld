@@ -14,3 +14,7 @@ if(Python3_FOUND)
                    $<TARGET_FILE:render_impulse>
                    "${CMAKE_SOURCE_DIR}/presets/sample/Sennheiser HD 650 ParametricEQ.txt")
 endif()
+
+add_executable(test_library tests/test_library.cpp)
+add_test(NAME headphone_library
+         COMMAND test_library ${CMAKE_SOURCE_DIR}/data/headphones.tsv ${CMAKE_SOURCE_DIR}/presets/sample)

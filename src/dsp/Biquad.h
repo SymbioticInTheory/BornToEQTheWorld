@@ -8,7 +8,7 @@ namespace bteq {
 
 constexpr double kPi = 3.14159265358979323846;
 
-enum class FilterType { Peaking, LowShelf, HighShelf };
+enum class FilterType { Peaking, LowShelf, HighShelf, LowPass };
 
 struct BiquadCoeffs {
     // Normalised so a0 == 1. Difference equation:
@@ -44,6 +44,14 @@ struct BiquadCoeffs {
             a2 = (A + 1) + (A - 1) * cw - s;
             break;
         }
+        case FilterType::LowPass: // 12 dB/oct, gain ignored
+            b0 = (1 - cw) / 2;
+            b1 = 1 - cw;
+            b2 = (1 - cw) / 2;
+            a0 = 1 + alpha;
+            a1 = -2 * cw;
+            a2 = 1 - alpha;
+            break;
         case FilterType::HighShelf:
         default: {
             const double s = 2 * std::sqrt(A) * alpha;

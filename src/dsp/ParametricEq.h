@@ -55,6 +55,7 @@ inline std::optional<ParametricPreset> parseParametricText(const std::string& te
         if (type == "PK" || type == "PEQ") f.type = FilterType::Peaking;
         else if (type == "LSC" || type == "LS") f.type = FilterType::LowShelf;
         else if (type == "HSC" || type == "HS") f.type = FilterType::HighShelf;
+        else if (type == "LP" || type == "LPQ") { f.type = FilterType::LowPass; f.gainDb = 0; }
         else { if (skipped) skipped->push_back(line); continue; }
         std::string key;
         while (ls >> key) {
