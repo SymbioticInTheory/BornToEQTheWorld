@@ -7,6 +7,7 @@
 #include "dsp/GraphicEq.h"
 #include "dsp/HeadphoneLibrary.h"
 
+#include <array>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -139,8 +140,26 @@ private:
     std::unique_ptr<bteq::ParametricEq> activeEq, pendingEq;
     std::atomic<bool> pendingReady { false };
 
-    // Graphic engine (thread-safe IR loading is handled by juce::dsp::Convolution).
-    juce::dsp::Convolution convolution;
+    // Graphic engine: a convolution that is completely built on the message
+    // thread (IR loaded and prepared there), then swapped in on the audio
+    // thread the same way as the parametric engine, crossfaded over one block.
+    // Old engines are handed back and freed on the message thread.
+    struct GraphicEngine {
+        juce::dsp::Convolution conv;
+        int blockSize = 1; // largest block it was prepared for
+        // Runs the filter, in pieces if the host sends a block larger than it said it would.
+        void process(juce::dsp::AudioBlock<float> block) {
+            for (size_t pos = 0; pos < block.getNumSamples(); pos += (size_t)blockSize) {
+                auto part = block.getSubBlock(pos, juce::jmin((size_t)blockSize, block.getNumSamples() - pos));
+                conv.process(juce::dsp::ProcessContextReplacing<float>(part));
+            }
+        }
+    };
+    std::unique_ptr<GraphicEngine> activeGraphic, pendingGraphic, fadingGraphic;
+    std::atomic<bool> pendingGraphicReady { false };
+    std::array<std::unique_ptr<GraphicEngine>, 8> retiredGraphic; // guarded by swapLock
+    juce::AudioBuffer<float> fadeBuffer;
+    void freeRetiredGraphic();
     std::atomic<bool> graphicReady { false };
     bool lastBlockGraphic = false;
 
