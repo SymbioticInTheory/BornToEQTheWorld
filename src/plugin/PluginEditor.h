@@ -42,6 +42,8 @@ public:
     void drawScrollbar(juce::Graphics&, juce::ScrollBar&, int x, int y, int w, int h, bool vertical, int thumbStart,
                        int thumbSize, bool over, bool down) override;
     juce::Font getPopupMenuFont() override;
+    void drawRotarySlider(juce::Graphics&, int x, int y, int w, int h, float pos, float start, float end,
+                          juce::Slider&) override;
     juce::Colour accentColour;
 
 private:
@@ -100,6 +102,22 @@ private:
     std::array<std::array<juce::Label, numFields>, maxCards> values;
 };
 
+// Rotary knob that reports right-clicks (used to type an exact value).
+class ValueKnob : public juce::Slider {
+public:
+    std::function<void()> onRightClick, onDoubleClick;
+    void mouseDoubleClick(const juce::MouseEvent&) override {
+        if (onDoubleClick) onDoubleClick();
+    }
+    void mouseDown(const juce::MouseEvent& e) override {
+        if (e.mods.isPopupMenu()) {
+            if (onRightClick) onRightClick();
+            return;
+        }
+        juce::Slider::mouseDown(e);
+    }
+};
+
 class BteqEditor : public juce::AudioProcessorEditor, private juce::Timer {
 public:
     explicit BteqEditor(BteqProcessor&);
@@ -108,9 +126,23 @@ public:
     void resized() override;
 
 private:
+    // Everything is laid out at 1080 x 680 inside this component, which is
+    // scaled to the size picked from the right-click menu.
+    struct Content : juce::Component {
+        explicit Content(BteqEditor& e) : ed(e) {}
+        void paint(juce::Graphics& g) override { ed.paintContent(g); }
+        BteqEditor& ed;
+    };
+    void paintContent(juce::Graphics&);
+    void layoutContent();
+    void mouseDown(const juce::MouseEvent&) override; // right-clicks anywhere in the window
+    void showScaleMenu();
+    void setUiScale(float scale);
     void timerCallback() override;
     void refreshHeadphones();
     void refreshTargets();
+    void showMatchChooser(juce::Rectangle<int> rowInList);
+    static constexpr int kMatchRow = -2; // target list row for "sound like another headphone"
     void setAccent(int index);
     void setMode(bool graphic);
     void refreshEditing();
@@ -142,6 +174,8 @@ private:
     juce::SharedResourcePointer<Theme> theme;
     BteqLookAndFeel lnf;
     juce::Image background;
+    Content content { *this };
+    ValueKnob preampKnob;
 
     juce::TextButton bypassButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAttachment;
@@ -171,7 +205,8 @@ private:
     juce::String loadedSavedSelection; // headphone + profile it was loaded for
     std::unique_ptr<juce::AlertWindow> nameWindow;
 
-    juce::String shownHeadphone;
+    juce::String shownHeadphone, shownMatch;
+    juce::Component::SafePointer<juce::CallOutBox> matchBox;
     int shownProfile = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BteqEditor)

@@ -126,6 +126,33 @@ void BteqLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, c
     g.drawRoundedRectangle(r.reduced(0.5f), 8.0f, 1.0f);
 }
 
+void BteqLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w, int h, float pos, float start, float end,
+                                       juce::Slider& s) {
+    const auto r = juce::Rectangle<float>((float)x, (float)y, (float)w, (float)h).reduced(4.0f);
+    const float radius = juce::jmin(r.getWidth(), r.getHeight()) * 0.5f;
+    const auto c = r.getCentre();
+    const float angle = start + pos * (end - start);
+    // Arc track and value (from 0 dB).
+    const float zeroPos = (float)s.valueToProportionOfLength(0.0);
+    const float zeroAngle = start + zeroPos * (end - start);
+    juce::Path track, value;
+    track.addCentredArc(c.x, c.y, radius, radius, 0.0f, start, end, true);
+    value.addCentredArc(c.x, c.y, radius, radius, 0.0f, juce::jmin(angle, zeroAngle), juce::jmax(angle, zeroAngle), true);
+    g.setColour(juce::Colour(0x29ffffff));
+    g.strokePath(track, juce::PathStrokeType(3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour(accentColour);
+    g.strokePath(value, juce::PathStrokeType(3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    // Body and pointer.
+    const float body = radius - 6.0f;
+    g.setColour(juce::Colour(0xff15171A));
+    g.fillEllipse(c.x - body, c.y - body, body * 2, body * 2);
+    g.setColour(juce::Colour(0x33ffffff));
+    g.drawEllipse(c.x - body, c.y - body, body * 2, body * 2, 1.0f);
+    const juce::Point<float> tip(c.x + std::sin(angle) * (body - 3.0f), c.y - std::cos(angle) * (body - 3.0f));
+    g.setColour(Theme::textBright);
+    g.drawLine(c.x + std::sin(angle) * 3.0f, c.y - std::cos(angle) * 3.0f, tip.x, tip.y, 2.0f);
+}
+
 juce::Font BteqLookAndFeel::getPopupMenuFont() { return theme.bodyFont(15.0f); }
 
 void BteqLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& b, bool, bool) {
@@ -341,7 +368,16 @@ void ResponseGraph::paintEq(juce::Graphics& g, double k, juce::Colour colour, fl
 void ResponseGraph::paintAdvanced(juce::Graphics& g, const bteq::HeadphoneProfile& p, double k, juce::Colour curveColour) {
     const auto& freqs = proc.library().graphicFrequencies();
     bteq::CurveLibrary::Curves c;
-    if (curves != nullptr && (*curves)->loaded) c = (*curves)->curves.find(p.name, p.source, p.rig, p.originalPreset, p.target);
+    std::vector<float> matchOwn, matchOther;
+    if (const auto& m = proc.currentMatch(); m.active) {
+        // Sounding like another headphone: its measurement is the target.
+        matchOwn.assign(m.ownMeasured.begin(), m.ownMeasured.end());
+        matchOther.assign(m.otherMeasured.begin(), m.otherMeasured.end());
+        c.measured = &matchOwn;
+        c.target = &matchOther;
+    } else if (curves != nullptr && (*curves)->loaded) {
+        c = (*curves)->curves.find(p.name, p.source, p.rig, p.originalPreset, p.target);
+    }
 
     // EQ response on the curve frequencies.
     std::vector<double> eq(freqs.size(), 0.0);
@@ -583,6 +619,24 @@ void FiltersPanel::paint(juce::Graphics& g) {
                          juce::Justification::topLeft, 3);
         return;
     }
+    if (const auto& m = proc.currentMatch(); m.active) {
+        auto r = getLocalBounds().reduced(6, 4);
+        g.setColour(Theme::text);
+        g.setFont(theme.labelFont(19.0f));
+        g.drawText("Sounding like " + proc.matchedHeadphone(), r.removeFromTop(26), juce::Justification::centredLeft, true);
+        g.setColour(Theme::soft);
+        g.setFont(theme.bodyFont(14.0f));
+        g.drawFittedText("The difference between the two headphones' measurements, smoothed in the treble and faded "
+                         "out above 12 kHz, applied as a 127-point graphic EQ. Its measurement comes from " + m.source + ".",
+                         r.removeFromTop(60), juce::Justification::topLeft, 3);
+        g.setColour(m.sameRig ? Theme::text : juce::Colour(0xffFFB5A6));
+        g.drawFittedText(m.sameRig ? juce::String("Both measured on the same rig, so the match is as close as it gets. "
+                                                  "Turn on Advanced to see both curves.")
+                                   : juce::String("Measured on different rigs or by different people, so treat the "
+                                                  "treble as approximate."),
+                         r.removeFromTop(44), juce::Justification::topLeft, 2);
+        return;
+    }
     if (proc.graphicModeActive()) {
         auto r = getLocalBounds().reduced(6, 4);
         g.setColour(Theme::text);
@@ -639,7 +693,7 @@ BteqEditor::BteqEditor(BteqProcessor& p)
     bypassButton.setButtonText("Bypass");
     bypassButton.setClickingTogglesState(true);
     bypassButton.getProperties().set("kind", "bypass");
-    addAndMakeVisible(bypassButton);
+    content.addAndMakeVisible(bypassButton);
     bypassAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.params, "bypass", bypassButton);
 
     search.setTextToShowWhenEmpty("Search headphones", Theme::muted);
@@ -647,12 +701,12 @@ BteqEditor::BteqEditor(BteqProcessor& p)
     search.setIndents(36, 13);
     search.setTitle("Search headphones");
     search.onTextChange = [this] { refreshHeadphones(); };
-    addAndMakeVisible(search);
+    content.addAndMakeVisible(search);
 
     for (auto* lb : { &headphoneList, &targetList }) {
         lb->setRowHeight(34);
         lb->setColour(juce::ListBox::backgroundColourId, juce::Colours::transparentBlack);
-        addAndMakeVisible(*lb);
+        content.addAndMakeVisible(*lb);
     }
     headphoneList.setTitle("Matching headphones");
     targetList.setTitle("Targets");
@@ -660,18 +714,18 @@ BteqEditor::BteqEditor(BteqProcessor& p)
     for (auto* tab : { &parametricTab, &graphicTab }) {
         tab->getProperties().set("kind", "tab");
         tab->setRadioGroupId(1);
-        addAndMakeVisible(*tab);
+        content.addAndMakeVisible(*tab);
     }
     parametricTab.onClick = [this] { setMode(false); };
     graphicTab.onClick = [this] { setMode(true); };
 
-    addAndMakeVisible(graph);
-    addAndMakeVisible(filters);
+    content.addAndMakeVisible(graph);
+    content.addAndMakeVisible(filters);
 
     correction.setSliderStyle(juce::Slider::LinearHorizontal);
     correction.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     correction.setTitle("Correction amount");
-    addAndMakeVisible(correction);
+    content.addAndMakeVisible(correction);
     correctionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.params, "amount", correction);
 
     for (int i = 0; i < Theme::numAccents; ++i) {
@@ -682,36 +736,53 @@ BteqEditor::BteqEditor(BteqProcessor& p)
         s.setTooltip(Theme::accentName(i));
         s.setRadioGroupId(2);
         s.onClick = [this, i] { setAccent(i); };
-        addAndMakeVisible(s);
+        content.addAndMakeVisible(s);
     }
 
-    preampValue.setFont(theme->bodyFont(13.0f));
+    preampValue.setFont(theme->labelFont(16.0f));
     preampValue.setColour(juce::Label::textColourId, Theme::text);
-    preampValue.setJustificationType(juce::Justification::centredRight);
+    preampValue.setJustificationType(juce::Justification::centredLeft);
     preampValue.setBorderSize({ 0, 0, 0, 0 });
     preampValue.setEditable(true, false, false);
     preampValue.setMouseCursor(juce::MouseCursor::IBeamCursor);
     preampValue.setTitle("Preamp");
-    preampValue.setTooltip("Click to type a preamp level");
+    preampValue.setTooltip("Double-click to type a preamp level");
     preampValue.onTextChange = [this] {
         const double v = parseTyped(preampValue.getText(), false);
         if (!std::isnan(v)) proc.setPreamp(v);
         refreshEditing();
     };
-    addAndMakeVisible(preampValue);
+    content.addAndMakeVisible(preampValue);
 
     resetButton.getProperties().set("kind", "small");
     resetButton.setTooltip("Go back to the published settings for this target");
-    resetButton.onClick = [this] { proc.resetEdits(); refreshEditing(); repaint(); };
-    addChildComponent(resetButton);
+    resetButton.onClick = [this] { proc.resetEdits(); refreshEditing(); content.repaint(); };
+    content.addChildComponent(resetButton);
 
     savedButton.getProperties().set("kind", "dropdown");
     savedButton.setTitle("Saved profiles");
     savedButton.onClick = [this] { showSavedMenu(); };
-    addAndMakeVisible(savedButton);
+    content.addAndMakeVisible(savedButton);
 
+    preampKnob.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    preampKnob.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    preampKnob.setRange(-30.0, 12.0, 0.1);
+    preampKnob.setMouseDragSensitivity(300);
+    preampKnob.setTitle("Preamp");
+    preampKnob.setTooltip("Drag to set the preamp. Right-click to type a value, double-click for the published value.");
+    preampKnob.onValueChange = [this] {
+        if (std::abs(preampKnob.getValue() - proc.preampSettingDb()) > 0.04) proc.setPreamp(preampKnob.getValue());
+        refreshEditing();
+    };
+    preampKnob.onRightClick = [this] { preampValue.showEditor(); };
+    preampKnob.onDoubleClick = [this] { proc.resetPreamp(); refreshEditing(); };
+    content.addAndMakeVisible(preampKnob);
+    preampValue.setEditable(false, true, false);
+
+    content.addMouseListener(this, true);
+    addAndMakeVisible(content);
     setAccent(proc.accentIndex);
-    setSize(1080, 680);
+    setUiScale(proc.uiScale);
 
     // Start with the selected headphone (if any) shown in the search box.
     if (proc.selectedHeadphone().isNotEmpty()) search.setText(proc.selectedHeadphone(), false);
@@ -727,7 +798,7 @@ void BteqEditor::setAccent(int index) {
     proc.accentIndex = juce::jlimit(0, Theme::numAccents - 1, index);
     lnf.accentColour = graph.accent = filters.accent = Theme::accent(proc.accentIndex);
     swatches[(size_t)proc.accentIndex].setToggleState(true, juce::dontSendNotification);
-    repaint();
+    content.repaint();
 }
 
 void BteqEditor::setMode(bool graphicMode) {
@@ -744,7 +815,11 @@ void BteqEditor::refreshTargets() {
     targetRows.clear();
     shownHeadphone = proc.selectedHeadphone();
     shownProfile = proc.selectedProfileIndex();
+    shownMatch = proc.matchedHeadphone();
     if (const auto idx = proc.library().headphoneIndex(shownHeadphone.toStdString())) {
+        targetRows.push_back({ true, "Sound like another headphone", -1 });
+        targetRows.push_back({ false, proc.matchedHeadphone().isNotEmpty() ? proc.matchedHeadphone()
+                                                                           : juce::String("Choose a headphone..."), kMatchRow });
         const auto profs = proc.library().profilesFor(*idx);
         juce::String lastHeading;
         for (size_t i = 0; i < profs.size(); ++i) {
@@ -763,11 +838,13 @@ void BteqEditor::refreshTargets() {
 }
 
 void BteqEditor::timerCallback() {
-    if (proc.selectedHeadphone() != shownHeadphone || proc.selectedProfileIndex() != shownProfile) refreshTargets();
+    if (proc.selectedHeadphone() != shownHeadphone || proc.selectedProfileIndex() != shownProfile ||
+        proc.matchedHeadphone() != shownMatch)
+        refreshTargets();
 
     const auto* p = proc.selectedProfile();
     const bool hasP = p != nullptr && p->hasParametric, hasG = proc.graphicAvailable();
-    parametricTab.setEnabled(hasP || p == nullptr);
+    parametricTab.setEnabled((hasP || p == nullptr) && !proc.currentMatch().active);
     graphicTab.setEnabled(hasG);
     const bool graphic = proc.graphicModeActive();
     parametricTab.setToggleState(!graphic, juce::dontSendNotification);
@@ -777,17 +854,19 @@ void BteqEditor::timerCallback() {
     refreshEditing();
     graph.repaint();
     filters.repaint();
-    repaint(kCorrectionPanel.withHeight(40));
-    repaint(kCorrectionPanel.withTrimmedTop(100).withHeight(30));
-    repaint(juce::Rectangle<int>(700, 0, 250, 72));
-    repaint(kTabsPanel.withX(kTabsPanel.getRight()).withWidth(kGraphPanel.getRight() - kTabsPanel.getRight()));
+    content.repaint(kCorrectionPanel.withHeight(40));
+    content.repaint(kCorrectionPanel.withTrimmedTop(100).withHeight(30));
+    content.repaint(juce::Rectangle<int>(680, 0, 250, 72));
+    content.repaint(kTabsPanel.withX(kTabsPanel.getRight()).withWidth(kGraphPanel.getRight() - kTabsPanel.getRight()));
 }
 
-void BteqEditor::paint(juce::Graphics& g) {
-    const auto bounds = getLocalBounds().toFloat();
+void BteqEditor::paint(juce::Graphics& g) { g.fillAll(juce::Colour(0xff0B0C0D)); }
+
+void BteqEditor::paintContent(juce::Graphics& g) {
+    const auto bounds = content.getLocalBounds().toFloat();
     g.fillAll(juce::Colour(0xff0B0C0D));
     if (background.isValid())
-        g.drawImageWithin(background, 0, 0, getWidth(), getHeight(), juce::RectanglePlacement::fillDestination);
+        g.drawImageWithin(background, 0, 0, content.getWidth(), content.getHeight(), juce::RectanglePlacement::fillDestination);
     juce::ColourGradient fog(juce::Colour(0x400A0B0C), bounds.getWidth() * 0.55f, bounds.getHeight() * 0.3f,
                              juce::Colour(0xe608090A), 0.0f, bounds.getHeight() * 1.05f, true);
     fog.addColour(0.55, juce::Colour(0x9e0A0B0C));
@@ -809,9 +888,7 @@ void BteqEditor::paint(juce::Graphics& g) {
     const double pre = proc.currentPreampDb() * (proc.params.getRawParameterValue("bypass")->load() > 0.5f ? 0.0 : 1.0);
     g.setFont(theme->labelFont(16.0f));
     g.setColour(Theme::muted);
-    g.drawText("PREAMP", 760, 20, 80, 32, juce::Justification::centredRight);
-    g.setColour(Theme::text);
-    g.drawText(formatDb(pre), 846, 20, 82, 32, juce::Justification::centredLeft);
+    g.drawText("PREAMP", 686, 20, 66, 32, juce::Justification::centredRight);
 
     // Panels.
     for (auto r : { kHeadphonePanel, kTargetPanel, kTabsPanel, kGraphPanel, kFiltersPanel, kCorrectionPanel }) drawPanel(g, r);
@@ -837,7 +914,9 @@ void BteqEditor::paint(juce::Graphics& g) {
     const auto* p = proc.selectedProfile();
     juce::String note;
     if (p != nullptr) {
-        if (proc.graphicModeActive()) note = "Wavelet-style 127-point curve";
+        if (proc.currentMatch().active) note = "Sounding like " + proc.matchedHeadphone();
+        else if (proc.matchedHeadphone().isNotEmpty()) note = "No measurement to match with for this source";
+        else if (proc.graphicModeActive()) note = "Wavelet-style 127-point curve";
         else if (p->originalPreset && !proc.selectionEdited()) note = juce::String((int)p->parametric.filters.size()) + " filters, exactly as " + juce::String(p->source) + " published them";
         else if (p->originalPreset) note = juce::String((int)p->parametric.filters.size()) + " filters from " + juce::String(p->source);
         else note = juce::String((int)p->parametric.filters.size()) + " filters from AutoEQ";
@@ -861,8 +940,11 @@ void BteqEditor::paint(juce::Graphics& g) {
     g.drawText("Full", sl.getRight() - 40, sl.getBottom() + 2, 40, 14, juce::Justification::centredRight);
     g.setFont(theme->bodyFont(13.0f));
     g.setColour(juce::Colour(0xffB2AFA9));
-    g.drawText(proc.selectionEdited() ? "Preamp at 100% (edited)" : "Preamp at 100%", kCorrectionPanel.getX() + 14,
-               kCorrectionPanel.getY() + 104, 150, 20, juce::Justification::centredLeft);
+    g.drawText("Preamp applied now", kCorrectionPanel.getX() + 14, kCorrectionPanel.getY() + 104, 150, 20,
+               juce::Justification::centredLeft);
+    g.setColour(Theme::text);
+    g.drawText(formatDb(pre), kCorrectionPanel.getRight() - 114, kCorrectionPanel.getY() + 104, 100, 20,
+               juce::Justification::centredRight);
     g.setColour(juce::Colour(0x14ffffff));
     g.drawHorizontalLine(kCorrectionPanel.getBottom() - 54, (float)kCorrectionPanel.getX() + 14, (float)kCorrectionPanel.getRight() - 14);
 
@@ -873,8 +955,11 @@ void BteqEditor::paint(juce::Graphics& g) {
     }
 }
 
-void BteqEditor::resized() {
-    bypassButton.setBounds(getWidth() - 26 - 110, 14, 110, 44);
+void BteqEditor::resized() {}
+
+void BteqEditor::layoutContent() {
+    bypassButton.setBounds(1080 - 26 - 110, 14, 110, 44);
+    preampKnob.setBounds(756, 13, 46, 46);
     search.setBounds(kHeadphonePanel.getX() + 14, kHeadphonePanel.getY() + 38, kHeadphonePanel.getWidth() - 28, 44);
     headphoneList.setBounds(kHeadphonePanel.getX() + 10, kHeadphonePanel.getY() + 90, kHeadphonePanel.getWidth() - 20,
                             kHeadphonePanel.getHeight() - 100);
@@ -885,12 +970,147 @@ void BteqEditor::resized() {
     graph.setBounds(kGraphPanel.reduced(12, 8));
     filters.setBounds(kFiltersPanel.reduced(12));
     correction.setBounds(kCorrectionPanel.getX() + 12, kCorrectionPanel.getY() + 58, kCorrectionPanel.getWidth() - 24, 26);
-    preampValue.setBounds(kCorrectionPanel.getRight() - 94, kCorrectionPanel.getY() + 104, 80, 20);
+    preampValue.setBounds(808, 20, 100, 32);
     resetButton.setBounds(kFiltersPanel.getRight() - 12 - 64, kFiltersPanel.getBottom() - 12 - 20, 64, 22);
     savedButton.setBounds(462, 18, 210, 36);
     for (int i = 0; i < Theme::numAccents; ++i)
         swatches[(size_t)i].setBounds(kCorrectionPanel.getRight() - 14 - (Theme::numAccents - i) * 36 + 2,
                                       kCorrectionPanel.getBottom() - 46, 34, 34);
+}
+
+// Sound like another headphone ---------------------------------------------------
+namespace {
+// Search box and list of headphones that have a measurement.
+class MatchChooser : public juce::Component, private juce::ListBoxModel {
+public:
+    MatchChooser(BteqProcessor& p, const Theme& t, std::function<void(juce::String)> chosen)
+        : proc(p), theme(t), onChosen(std::move(chosen)) {
+        search.setTextToShowWhenEmpty("Search headphones to sound like", Theme::muted);
+        search.setFont(theme.bodyFont(15.0f));
+        search.setIndents(12, 10);
+        search.onTextChange = [this] { refresh(); };
+        addAndMakeVisible(search);
+        list.setRowHeight(30);
+        list.setColour(juce::ListBox::backgroundColourId, juce::Colours::transparentBlack);
+        addAndMakeVisible(list);
+        clear.getProperties().set("kind", "small");
+        clear.onClick = [this] { onChosen({}); };
+        addChildComponent(clear);
+        clear.setVisible(proc.matchedHeadphone().isNotEmpty());
+        setSize(340, 360);
+        refresh();
+    }
+    void resized() override {
+        auto r = getLocalBounds().reduced(4);
+        search.setBounds(r.removeFromTop(38));
+        r.removeFromTop(6);
+        if (clear.isVisible()) clear.setBounds(r.removeFromBottom(26).removeFromRight(120));
+        list.setBounds(r);
+    }
+    void parentHierarchyChanged() override { search.grabKeyboardFocus(); }
+
+private:
+    void refresh() {
+        results.clear();
+        const auto* curves = proc.curveLibrary();
+        if (curves == nullptr) return;
+        for (const auto i : proc.library().search(search.getText().toStdString(), 400)) {
+            const std::string name = proc.library().headphoneName(i);
+            if (juce::String(name) != proc.selectedHeadphone() && curves->hasMeasurement(name)) results.push_back(name);
+        }
+        list.updateContent();
+        list.repaint();
+    }
+    int getNumRows() override { return (int)results.size(); }
+    void paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool) override {
+        if (row < 0 || row >= (int)results.size()) return;
+        const juce::String name(results[(size_t)row]);
+        const bool on = name == proc.matchedHeadphone();
+        if (on) {
+            g.setColour(Theme::selected);
+            g.fillRoundedRectangle(0.0f, 1.0f, (float)w, (float)h - 2.0f, 6.0f);
+        }
+        g.setColour(on ? Theme::textBright : Theme::soft);
+        g.setFont(theme.bodyFont(15.0f, on));
+        g.drawText(name, 10, 0, w - 16, h, juce::Justification::centredLeft, true);
+    }
+    void listBoxItemClicked(int row, const juce::MouseEvent&) override {
+        if (row >= 0 && row < (int)results.size()) onChosen(juce::String(results[(size_t)row]));
+    }
+
+    BteqProcessor& proc;
+    const Theme& theme;
+    std::function<void(juce::String)> onChosen;
+    juce::TextEditor search;
+    juce::ListBox list { "Headphones to sound like", this };
+    juce::TextButton clear { "Stop matching" };
+    std::vector<std::string> results;
+};
+} // namespace
+
+void BteqEditor::showMatchChooser(juce::Rectangle<int> rowInList) {
+    juce::Component::SafePointer<BteqEditor> safe(this);
+    auto chooser = std::make_unique<MatchChooser>(proc, *theme, [safe](juce::String name) {
+        if (safe == nullptr) return;
+        safe->proc.setMatch(name);
+        safe->refreshTargets();
+        safe->content.repaint();
+        if (auto* box = safe->matchBox.getComponent()) box->dismiss();
+    });
+    const auto area = targetList.getBounds().getTopLeft() + rowInList.getPosition();
+    auto& box = juce::CallOutBox::launchAsynchronously(std::move(chooser),
+                                                       juce::Rectangle<int>(area.x, area.y, rowInList.getWidth(), rowInList.getHeight()),
+                                                       &content);
+    matchBox = &box;
+}
+
+// Window scale ------------------------------------------------------------------
+namespace {
+juce::File settingsFile() {
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("Born To EQ The World")
+        .getChildFile("settings.xml");
+}
+} // namespace
+
+void BteqEditor::setUiScale(float scale) {
+    if (scale <= 0.0f) { // new instance: use the last scale picked anywhere
+        scale = 1.0f;
+        if (auto xml = juce::XmlDocument::parse(settingsFile())) scale = (float)xml->getDoubleAttribute("uiScale", 1.0);
+    }
+    scale = juce::jlimit(0.5f, 1.25f, scale);
+    proc.uiScale = scale;
+    content.setBounds(0, 0, 1080, 680);
+    content.setTransform(juce::AffineTransform::scale(scale));
+    layoutContent();
+    setSize(juce::roundToInt(1080 * scale), juce::roundToInt(680 * scale));
+}
+
+void BteqEditor::mouseDown(const juce::MouseEvent& e) {
+    if (!e.mods.isPopupMenu()) return;
+    // Leave right-clicks on knobs and text fields to them.
+    for (auto* c = e.eventComponent; c != nullptr && c != &content; c = c->getParentComponent())
+        if (dynamic_cast<juce::Slider*>(c) != nullptr || dynamic_cast<juce::TextEditor*>(c) != nullptr ||
+            dynamic_cast<juce::Label*>(c) != nullptr)
+            return;
+    showScaleMenu();
+}
+
+void BteqEditor::showScaleMenu() {
+    juce::PopupMenu menu;
+    menu.addSectionHeader("Window size");
+    const int sizes[] = { 125, 110, 100, 90, 75, 60, 50 };
+    for (int pct : sizes)
+        menu.addItem(pct, juce::String(pct) + "%", true, juce::roundToInt(proc.uiScale * 100.0f) == pct);
+    juce::Component::SafePointer<BteqEditor> safe(this);
+    menu.showMenuAsync(juce::PopupMenu::Options(), [safe](int pct) {
+        if (safe == nullptr || pct <= 0) return;
+        safe->setUiScale((float)pct / 100.0f);
+        juce::XmlElement xml("SETTINGS");
+        xml.setAttribute("uiScale", (double)pct / 100.0);
+        settingsFile().getParentDirectory().createDirectory();
+        xml.writeTo(settingsFile());
+    });
 }
 
 // Editing ---------------------------------------------------------------------
@@ -903,6 +1123,9 @@ void BteqEditor::refreshEditing() {
         if (preampValue.getText() != text) preampValue.setText(text, juce::dontSendNotification);
     }
     resetButton.setVisible(proc.selectionEdited());
+    preampKnob.setVisible(p != nullptr);
+    if (!preampKnob.isMouseButtonDown() && std::abs(preampKnob.getValue() - proc.preampSettingDb()) > 0.04)
+        preampKnob.setValue(proc.preampSettingDb(), juce::dontSendNotification);
 
     // Saved profiles dropdown: show the saved name until the selection changes.
     const auto selection = proc.selectedHeadphone() + "|" + juce::String(proc.selectedProfileIndex());
@@ -1017,7 +1240,7 @@ void BteqEditor::showSavedMenu() {
             ed.refreshHeadphones();
             ed.refreshTargets();
             remember(t.getProperty("name").toString());
-            ed.repaint();
+            ed.content.repaint();
         } else if (id == kUpdate) {
             for (int i = 0; i < saved.getNumChildren(); ++i)
                 if (saved.getChild(i).getProperty("name").toString() == ed.loadedSavedName) {
@@ -1029,7 +1252,9 @@ void BteqEditor::showSavedMenu() {
             remember(ed.loadedSavedName);
         } else if (id == kSaveNew) {
             const auto* p = ed.proc.selectedProfile();
-            const juce::String suggestion = p ? ed.proc.selectedHeadphone() + ", " + juce::String(p->target) : juce::String();
+            const juce::String suggestion = p == nullptr ? juce::String()
+                                          : ed.proc.matchedHeadphone().isNotEmpty() ? ed.proc.selectedHeadphone() + " as " + ed.proc.matchedHeadphone()
+                                                                                    : ed.proc.selectedHeadphone() + ", " + juce::String(p->target);
             ed.askForName("Save profile", suggestion, [safe, snapshotNamed, remember](juce::String name) {
                 if (safe == nullptr) return;
                 auto fresh = loadSavedProfiles();
@@ -1060,7 +1285,7 @@ void BteqEditor::HeadphoneModel::listBoxItemClicked(int row, const juce::MouseEv
     ed.proc.selectHeadphone(ed.proc.library().headphoneName(ed.results[(size_t)row]));
     ed.refreshTargets();
     ed.headphoneList.repaint();
-    ed.repaint();
+    ed.content.repaint();
 }
 
 void BteqEditor::TargetModel::paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool) {
@@ -1072,7 +1297,8 @@ void BteqEditor::TargetModel::paintListBoxItem(int row, juce::Graphics& g, int w
         g.drawText(r.text, 2, h / 2 - 2, w - 4, h / 2, juce::Justification::centredLeft, true);
         return;
     }
-    const bool on = r.profile == ed.proc.selectedProfileIndex();
+    const bool matching = ed.proc.matchedHeadphone().isNotEmpty();
+    const bool on = r.profile == kMatchRow ? matching : !matching && r.profile == ed.proc.selectedProfileIndex();
     if (on) {
         g.setColour(Theme::selected);
         g.fillRoundedRectangle(0.0f, 1.0f, (float)w, (float)h - 2.0f, 6.0f);
@@ -1089,8 +1315,13 @@ void BteqEditor::TargetModel::paintListBoxItem(int row, juce::Graphics& g, int w
 
 void BteqEditor::TargetModel::listBoxItemClicked(int row, const juce::MouseEvent&) {
     if (row < 0 || row >= (int)ed.targetRows.size() || ed.targetRows[(size_t)row].header) return;
+    if (ed.targetRows[(size_t)row].profile == kMatchRow) {
+        ed.showMatchChooser(ed.targetList.getRowPosition(row, false));
+        return;
+    }
+    ed.proc.setMatch({});
     ed.proc.selectProfile(ed.targetRows[(size_t)row].profile);
     ed.shownProfile = ed.proc.selectedProfileIndex();
     ed.targetList.repaint();
-    ed.repaint();
+    ed.content.repaint();
 }

@@ -115,13 +115,91 @@ void BteqProcessor::selectHeadphone(const juce::String& name) {
     const juce::ScopedLock sl(buildLock);
     headphoneName = name;
     profileIndex = 0;
+    computeMatch();
     rebuild(false);
 }
 
 void BteqProcessor::selectProfile(int index) {
     const juce::ScopedLock sl(buildLock);
     profileIndex = juce::jmax(0, index);
+    computeMatch();
     rebuild(false);
+}
+
+// ---------------------------------------------------------------------------
+// Sounding like another headphone (message thread)
+// ---------------------------------------------------------------------------
+const bteq::CurveLibrary* BteqProcessor::curveLibrary() {
+    if (curvesHolder == nullptr) curvesHolder = std::make_unique<juce::SharedResourcePointer<CurvesHolder>>();
+    return (*curvesHolder)->loaded ? &(*curvesHolder)->curves : nullptr;
+}
+
+void BteqProcessor::setMatch(const juce::String& otherHeadphone) {
+    const juce::ScopedLock sl(buildLock);
+    matchName = otherHeadphone;
+    computeMatch();
+    rebuild(false);
+}
+
+// The EQ that turns this headphone's measurement into the other one's: the
+// difference of the two curves, smoothed more in the treble (where
+// measurements are least repeatable) and faded out above 12 kHz.
+void BteqProcessor::computeMatch() {
+    match = {};
+    ++editVersion;
+    const auto* p = selectedProfile();
+    if (matchName.isEmpty() || p == nullptr) return;
+    const auto* lib = curveLibrary();
+    if (lib == nullptr) return;
+    const auto& freqs = holder->library.graphicFrequencies();
+
+    // This headphone: the selected profile's measurement, else its first one.
+    auto own = lib->find(p->name, p->source, p->rig, p->originalPreset, p->target).measured;
+    std::string ownSource = p->source, ownRig = p->rig;
+    if (own == nullptr) {
+        const auto all = lib->measurementsOf(p->name);
+        if (all.empty()) return;
+        own = all.front().curve;
+        ownSource = all.front().source;
+        ownRig = all.front().rig;
+    }
+    // The other headphone: prefer the same source and rig, then the same source.
+    const auto others = lib->measurementsOf(matchName.toStdString());
+    if (others.empty()) return;
+    const auto* best = &others.front();
+    int bestScore = -1;
+    for (const auto& m : others) {
+        const int score = (m.source == ownSource ? 2 : 0) + (m.rig == ownRig ? 1 : 0);
+        if (score > bestScore) { bestScore = score; best = &m; }
+    }
+    if (own->size() != freqs.size() || best->curve->size() != freqs.size()) return;
+
+    const size_t n = freqs.size();
+    std::vector<double> diff(n), smooth(n);
+    for (size_t i = 0; i < n; ++i) diff[i] = (double)(*best->curve)[i] - (double)(*own)[i];
+    for (size_t i = 0; i < n; ++i) {
+        const int half = freqs[i] < 2000 ? 1 : freqs[i] < 6000 ? 2 : 4; // about 1/6, 1/3 and 2/3 octave
+        double sum = 0;
+        int count = 0;
+        for (int j = (int)i - half; j <= (int)i + half; ++j)
+            if (j >= 0 && j < (int)n) { sum += diff[(size_t)j]; ++count; }
+        double v = juce::jlimit(-18.0, 12.0, sum / count);
+        if (freqs[i] > 12000) v *= juce::jlimit(0.0, 1.0, std::log(20000.0 / freqs[i]) / std::log(20000.0 / 12000.0));
+        smooth[i] = v;
+    }
+    match.shape = smooth;
+    match.preampDb = -std::max(0.0, *std::max_element(smooth.begin(), smooth.end()));
+    match.ownMeasured.assign(own->begin(), own->end());
+    match.otherMeasured.assign(best->curve->begin(), best->curve->end());
+    match.source = juce::String(best->source) + (best->rig.empty() ? "" : " (" + juce::String(best->rig) + ")");
+    match.sameRig = best->source == ownSource && best->rig == ownRig;
+    match.active = true;
+}
+
+juce::String BteqProcessor::editKey() const {
+    const auto* p = selectedProfile();
+    if (p == nullptr) return {};
+    return match.active ? "MATCH|" + headphoneName + "|" + matchName : profileKey(*p);
 }
 
 const bteq::HeadphoneProfile* BteqProcessor::selectedProfile() const {
@@ -134,11 +212,13 @@ const bteq::HeadphoneProfile* BteqProcessor::selectedProfile() const {
 }
 
 bool BteqProcessor::graphicAvailable() const {
+    if (match.active) return true;
     const auto* p = selectedProfile();
     return p != nullptr && !p->graphicGainsDb.empty() && !holder->library.graphicFrequencies().empty();
 }
 
 bool BteqProcessor::graphicModeActive() const {
+    if (match.active) return true;
     const auto* p = selectedProfile();
     const bool wantGraphic = modeParam->load() > 0.5f;
     // Profiles without a GraphicEQ curve (oratory1990's own presets) always run parametric.
@@ -157,13 +237,14 @@ double BteqProcessor::currentPreampDb() const { return preampDb; }
 const BteqProcessor::ProfileEdit* BteqProcessor::currentEdit() const {
     const auto* p = selectedProfile();
     if (p == nullptr) return nullptr;
-    const auto it = edits.find(profileKey(*p));
+    const auto it = edits.find(editKey());
     return it == edits.end() ? nullptr : &it->second;
 }
 
 double BteqProcessor::publishedPreampDb() const {
     const auto* p = selectedProfile();
     if (p == nullptr) return 0;
+    if (match.active) return match.preampDb;
     if (p->hasParametric) return p->parametric.preampDb;
     if (!p->graphicGainsDb.empty()) return *std::max_element(p->graphicGainsDb.begin(), p->graphicGainsDb.end());
     return 0;
@@ -187,6 +268,7 @@ bteq::ParametricPreset BteqProcessor::effectiveParametric() const {
 std::vector<double> BteqProcessor::graphicShapeDb() const {
     const auto* p = selectedProfile();
     if (p == nullptr) return {};
+    if (match.active) return match.shape;
     const double pre = publishedPreampDb();
     std::vector<double> shape;
     shape.reserve(p->graphicGainsDb.size());
@@ -202,7 +284,7 @@ bool BteqProcessor::selectionEdited() const {
 void BteqProcessor::setFilter(int index, const bteq::FilterSpec& spec) {
     const juce::ScopedLock sl(buildLock);
     const auto* p = selectedProfile();
-    if (p == nullptr || !p->hasParametric) return;
+    if (p == nullptr || !p->hasParametric || match.active) return;
     auto& e = edits[profileKey(*p)];
     if (!e.filtersEdited) {
         e.filters = p->parametric.filters;
@@ -218,16 +300,27 @@ void BteqProcessor::setPreamp(double db) {
     const juce::ScopedLock sl(buildLock);
     const auto* p = selectedProfile();
     if (p == nullptr) return;
-    auto& e = edits[profileKey(*p)];
+    auto& e = edits[editKey()];
     e.preampEdited = true;
     e.preampDb = juce::jlimit(-30.0, 12.0, db);
     ++editVersion;
     rebuild(false);
 }
 
+void BteqProcessor::resetPreamp() {
+    const juce::ScopedLock sl(buildLock);
+    const auto* p = selectedProfile();
+    if (p == nullptr) return;
+    const auto it = edits.find(editKey());
+    if (it == edits.end()) return;
+    it->second.preampEdited = false;
+    ++editVersion;
+    rebuild(false);
+}
+
 void BteqProcessor::resetEdits() {
     const juce::ScopedLock sl(buildLock);
-    if (const auto* p = selectedProfile()) edits.erase(profileKey(*p));
+    if (selectedProfile() != nullptr) edits.erase(editKey());
     ++editVersion;
     rebuild(false);
 }
@@ -351,6 +444,8 @@ void BteqProcessor::getStateInformation(juce::MemoryBlock& destData) {
     state.setProperty("accent", accentIndex, nullptr);
     state.setProperty("advanced", advancedView, nullptr);
     state.setProperty("hiddenCurves", hiddenCurves, nullptr);
+    state.setProperty("uiScale", uiScale, nullptr);
+    state.setProperty("match", matchName, nullptr);
     {
         const juce::ScopedLock sl(buildLock);
         juce::ValueTree list("EDITS");
@@ -385,7 +480,13 @@ void BteqProcessor::setStateInformation(const void* data, int sizeInBytes) {
     accentIndex = (int)state.getProperty("accent", 0);
     advancedView = (bool)state.getProperty("advanced", false);
     hiddenCurves = (int)state.getProperty("hiddenCurves", 0);
+    uiScale = (float)state.getProperty("uiScale", 0.0);
     profileIndex = indexForKey(headphoneName, state.getProperty("profile").toString());
+    {
+        const juce::ScopedLock sl(buildLock);
+        matchName = state.getProperty("match").toString();
+        computeMatch();
+    }
     rebuild(true);
 }
 
@@ -405,6 +506,7 @@ juce::ValueTree BteqProcessor::makeSnapshot() const {
     t.setProperty("profile", p ? profileKey(*p) : juce::String(), nullptr);
     t.setProperty("mode", modeParam->load() > 0.5f ? 1 : 0, nullptr);
     t.setProperty("amount", (double)amountParam->load(), nullptr);
+    t.setProperty("match", matchName, nullptr);
     if (const auto* e = currentEdit()) writeEdit(t, *e);
     return t;
 }
@@ -418,8 +520,10 @@ void BteqProcessor::loadSnapshot(const juce::ValueTree& t) {
     const juce::ScopedLock sl(buildLock);
     headphoneName = t.getProperty("headphone").toString();
     profileIndex = indexForKey(headphoneName, t.getProperty("profile").toString());
-    if (const auto* p = selectedProfile()) {
-        const auto key = profileKey(*p);
+    matchName = t.getProperty("match").toString();
+    computeMatch();
+    if (selectedProfile() != nullptr) {
+        const auto key = editKey();
         const auto e = readEdit(t);
         if (e.filtersEdited || e.preampEdited) edits[key] = e;
         else edits.erase(key);

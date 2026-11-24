@@ -19,10 +19,16 @@ public:
         const std::vector<float>* target = nullptr;   // nullptr when the target is unknown
     };
 
+    struct Measurement {
+        std::string source, rig;
+        const std::vector<float>* curve = nullptr;
+    };
+
     bool loadFromText(const std::string& text) {
         targets.clear();
         measurements.clear();
         profiles.clear();
+        byName.clear();
         std::istringstream in(text);
         std::string line;
         if (!std::getline(in, line) || line.rfind("BTEQCURVES\t", 0) != 0) return false;
@@ -31,11 +37,30 @@ public:
             const auto cols = split(line, '\t');
             if (cols[0] == "T" && cols.size() >= 3) targets[cols[1]] = parseValues(cols[2]);
             else if (cols[0] == "M" && cols.size() >= 3) measurements[cols[1]] = parseValues(cols[2]);
-            else if (cols[0] == "P" && cols.size() >= 8)
+            else if (cols[0] == "P" && cols.size() >= 8) {
                 profiles[key(cols[1], cols[2], cols[3], cols[4] == "O", cols[5])] = { cols[6], cols[7] };
+                if (cols[6] != "-") {
+                    auto& list = byName[cols[1]];
+                    bool seen = false;
+                    for (const auto& m : list) seen = seen || m.id == cols[6];
+                    if (!seen) list.push_back({ cols[2], cols[3], cols[6] });
+                }
+            }
         }
         return !profiles.empty();
     }
+
+    // Every measurement of a headphone, in library order (AutoEQ's recommended source first).
+    std::vector<Measurement> measurementsOf(const std::string& name) const {
+        std::vector<Measurement> out;
+        const auto it = byName.find(name);
+        if (it == byName.end()) return out;
+        for (const auto& m : it->second)
+            if (const auto c = measurements.find(m.id); c != measurements.end()) out.push_back({ m.source, m.rig, &c->second });
+        return out;
+    }
+
+    bool hasMeasurement(const std::string& name) const { return byName.count(name) > 0; }
 
     Curves find(const std::string& name, const std::string& source, const std::string& rig, bool originalPreset,
                 const std::string& target) const {
@@ -80,6 +105,8 @@ private:
 
     std::unordered_map<std::string, std::vector<float>> targets, measurements;
     std::unordered_map<std::string, std::pair<std::string, std::string>> profiles;
+    struct MeasurementRef { std::string source, rig, id; };
+    std::unordered_map<std::string, std::vector<MeasurementRef>> byName;
 };
 
 } // namespace bteq
