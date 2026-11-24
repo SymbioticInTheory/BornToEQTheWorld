@@ -80,6 +80,20 @@ public:
     void setFilter(int index, const bteq::FilterSpec& spec);
     void setPreamp(double db);
     void resetEdits();
+    void resetPreamp(); // back to the published preamp, keeping filter edits
+
+    // Make the selected headphone sound like another one (graphic EQ built
+    // from the two measurements). Empty name turns it off.
+    struct Match {
+        bool active = false, sameRig = true;
+        std::vector<double> shape, ownMeasured, otherMeasured;
+        double preampDb = 0;
+        juce::String source; // where the other headphone's measurement comes from
+    };
+    void setMatch(const juce::String& otherHeadphone);
+    juce::String matchedHeadphone() const { return matchName; }
+    const Match& currentMatch() const { return match; }
+    const bteq::CurveLibrary* curveLibrary(); // loaded on first use
 
     // Snapshot of the current choice (headphone, profile, mode, correction and
     // your edits), used by the saved profiles menu.
@@ -89,6 +103,7 @@ public:
     int accentIndex = 0; // UI colour choice, saved with the session
     bool advancedView = false; // UI: target and result curves, saved with the session
     int hiddenCurves = 0;      // UI: bit mask of curves switched off in the advanced legend
+    float uiScale = 0.0f;      // UI: window scale, 0 = use the last scale picked in any instance
     juce::AudioProcessorValueTreeState params;
 
 private:
@@ -107,6 +122,11 @@ private:
     int editVersion = 0, builtEditVersion = -1;
     const ProfileEdit* currentEdit() const;
     int indexForKey(const juce::String& headphone, const juce::String& key) const;
+    juce::String editKey() const;
+    void computeMatch();
+    juce::String matchName;
+    Match match;
+    std::unique_ptr<juce::SharedResourcePointer<CurvesHolder>> curvesHolder;
 
     std::atomic<float>* amountParam = nullptr;
     std::atomic<float>* bypassParam = nullptr;
