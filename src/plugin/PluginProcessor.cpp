@@ -328,7 +328,10 @@ void BteqProcessor::resetEdits() {
 // ---------------------------------------------------------------------------
 // Engine building (message thread, or prepareToPlay)
 // ---------------------------------------------------------------------------
-void BteqProcessor::timerCallback() { rebuild(false); }
+void BteqProcessor::timerCallback() {
+    rebuild(false);
+    freeRetiredGraphic();
+}
 
 void BteqProcessor::rebuild(bool force) {
     const juce::ScopedLock sl(buildLock);
@@ -375,16 +378,36 @@ void BteqProcessor::buildGraphic(const bteq::HeadphoneProfile*, double k, double
     const auto taps = bteq::designGraphicEqFir(freqs, gains, sr);
     juce::AudioBuffer<float> ir(1, (int)taps.size());
     std::copy(taps.begin(), taps.end(), ir.getWritePointer(0));
-    convolution.loadImpulseResponse(std::move(ir), sr, juce::dsp::Convolution::Stereo::no,
-                                    juce::dsp::Convolution::Trim::no, juce::dsp::Convolution::Normalise::no);
+
+    // Load first, then prepare: prepare runs the queued load and builds the
+    // engine right here, so the new filter is complete before the swap.
+    auto engine = std::make_unique<GraphicEngine>();
+    engine->conv.loadImpulseResponse(std::move(ir), sr, juce::dsp::Convolution::Stereo::no,
+                                     juce::dsp::Convolution::Trim::no, juce::dsp::Convolution::Normalise::no);
+    engine->blockSize = juce::jmax(1, maxBlock);
+    engine->conv.prepare({ sr, (juce::uint32)engine->blockSize, 2 });
+    freeRetiredGraphic();
+    {
+        const juce::SpinLock::ScopedLockType lock(swapLock);
+        pendingGraphic = std::move(engine); // an older pending one is freed here, on this thread
+        pendingGraphicReady = true;
+    }
     preampDb = pre * k; // already inside the filter; shown so both modes read the same way
     graphicReady = true;
+}
+
+void BteqProcessor::freeRetiredGraphic() {
+    std::array<std::unique_ptr<GraphicEngine>, 8> toFree;
+    {
+        const juce::SpinLock::ScopedLockType lock(swapLock);
+        for (size_t i = 0; i < retiredGraphic.size(); ++i) toFree[i] = std::move(retiredGraphic[i]);
+    }
 }
 
 void BteqProcessor::prepareToPlay(double sr, int samplesPerBlock) {
     sampleRate = sr;
     maxBlock = samplesPerBlock;
-    convolution.prepare({ sr, (juce::uint32)samplesPerBlock, 2 });
+    fadeBuffer.setSize(2, juce::jmax(1, samplesPerBlock));
     trimGain.reset(sr, 0.02);
     trimGain.setCurrentAndTargetValue(juce::Decibels::decibelsToGain(trimParam->load()));
     rebuild(true);
@@ -395,6 +418,11 @@ void BteqProcessor::prepareToPlay(double sr, int samplesPerBlock) {
         pendingReady = false;
     }
     if (activeEq) activeEq->reset();
+    if (pendingGraphicReady) {
+        std::swap(activeGraphic, pendingGraphic);
+        pendingGraphicReady = false;
+    }
+    fadingGraphic.reset();
 }
 
 // ---------------------------------------------------------------------------
@@ -406,21 +434,49 @@ void BteqProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     const int n = buffer.getNumSamples();
     for (int ch = numIn; ch < numOut; ++ch) buffer.clear(ch, 0, n);
 
-    if (pendingReady.load()) {
+    if (pendingReady.load() || pendingGraphicReady.load()) {
         const juce::SpinLock::ScopedTryLockType lock(swapLock);
         if (lock.isLocked()) {
-            std::swap(activeEq, pendingEq);
-            pendingReady = false;
+            if (pendingReady) {
+                std::swap(activeEq, pendingEq);
+                pendingReady = false;
+            }
+            // Take a new graphic engine only when the last crossfade is done and
+            // there is somewhere to hand an old engine back for freeing.
+            auto slot = std::find(retiredGraphic.begin(), retiredGraphic.end(), nullptr);
+            if (pendingGraphicReady && fadingGraphic == nullptr && slot != retiredGraphic.end()) {
+                fadingGraphic = std::move(activeGraphic);
+                activeGraphic = std::move(pendingGraphic);
+                pendingGraphicReady = false;
+            }
         }
     }
 
     const bool bypass = bypassParam->load() > 0.5f;
     const bool graphic = graphicReady.load();
     if (!bypass) {
-        if (graphic) {
-            if (!lastBlockGraphic) convolution.reset();
-            juce::dsp::AudioBlock<float> block(buffer);
-            convolution.process(juce::dsp::ProcessContextReplacing<float>(block));
+        if (graphic && activeGraphic != nullptr) {
+            // Coming from parametric or bypass there is nothing to fade from.
+            if (!lastBlockGraphic) activeGraphic->conv.reset();
+            const int chans = juce::jmin(buffer.getNumChannels(), 2);
+            const bool fade = lastBlockGraphic && fadingGraphic != nullptr && n <= fadeBuffer.getNumSamples();
+            if (fade)
+                for (int ch = 0; ch < chans; ++ch) fadeBuffer.copyFrom(ch, 0, buffer, ch, 0, n);
+            juce::dsp::AudioBlock<float> block(buffer.getArrayOfWritePointers(), (size_t)chans, (size_t)n);
+            activeGraphic->process(block);
+            if (fade) {
+                // Old filter fades out while the new one fades in.
+                juce::dsp::AudioBlock<float> old(fadeBuffer.getArrayOfWritePointers(), (size_t)chans, (size_t)n);
+                fadingGraphic->process(old);
+                for (int ch = 0; ch < chans; ++ch) {
+                    auto* out = buffer.getWritePointer(ch);
+                    const auto* prev = fadeBuffer.getReadPointer(ch);
+                    for (int i = 0; i < n; ++i) {
+                        const float t = (float)(i + 1) / (float)n;
+                        out[i] = out[i] * t + prev[i] * (1.0f - t);
+                    }
+                }
+            }
         } else if (activeEq) {
             if (lastBlockGraphic) activeEq->reset();
             const int chans = juce::jmin(buffer.getNumChannels(), activeEq->numChannels());
@@ -428,6 +484,15 @@ void BteqProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
         }
     }
     lastBlockGraphic = graphic && !bypass;
+
+    if (fadingGraphic != nullptr) {
+        // Hand the old engine back to the message thread to be freed.
+        const juce::SpinLock::ScopedTryLockType lock(swapLock);
+        if (lock.isLocked()) {
+            auto slot = std::find(retiredGraphic.begin(), retiredGraphic.end(), nullptr);
+            if (slot != retiredGraphic.end()) *slot = std::move(fadingGraphic);
+        }
+    }
 
     trimGain.setTargetValue(juce::Decibels::decibelsToGain(trimParam->load()));
     trimGain.applyGain(buffer, n);
