@@ -6,7 +6,7 @@ in-DAW alternative to Peace / Equalizer APO. Pick a headphone, pick a target
 
 ## Status
 
-Step 1 of 4: DSP core.
+Step 1 (DSP core) is done. Step 2 (headphone library) is in progress.
 
 - `src/dsp/Biquad.h`: RBJ cookbook peaking / low shelf / high shelf filters in
   double precision, Direct Form I, computed at the host sample rate. This is the
@@ -15,6 +15,13 @@ Step 1 of 4: DSP core.
   filter chain with preamp, correction amount (0 to 100%) and auto preamp.
 - `tests/compare_with_autoeq.py`: renders an impulse through the C++ core and
   compares it with AutoEQ's own filter maths at 44.1 to 192 kHz.
+- `data/headphones.tsv`: about 10,000 profiles for 6,200 headphones. For each
+  headphone you get oratory1990's own presets (used exactly as he published
+  them) and AutoEQ's results for every measurement source, with both
+  parametric and 127-point GraphicEQ (Wavelet-style) curves.
+- `src/dsp/HeadphoneLibrary.h`: loads that file, searches headphones by name
+  ("hd650" finds "Sennheiser HD 650") and lists each headphone's profiles.
+- `tools/build_library.py`: regenerates the library from AutoEQ and OPRA.
 
 ## Build and test
 
@@ -27,4 +34,6 @@ Requires Python 3 with numpy and scipy for the test.
 ## Data
 
 Headphone presets come from [AutoEQ](https://github.com/jaakkopasanen/AutoEq)
-(MIT licence), which includes oratory1990's measurements.
+(MIT licence) and oratory1990's own presets via
+[OPRA](https://github.com/opra-project/OPRA) (CC BY-SA 4.0). See
+`data/ATTRIBUTION.md`.
