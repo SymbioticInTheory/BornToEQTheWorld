@@ -23,6 +23,9 @@ struct Theme {
 
     static juce::Colour accent(int index);
     static juce::String accentName(int index);
+    // Advanced view colours that stay clear of the chosen accent (used for the corrected curve).
+    static juce::Colour measuredFor(int accentIndex);
+    static juce::Colour eqFor(int accentIndex);
     static constexpr int numAccents = 4;
 
     static inline const juce::Colour text { 0xffE8E4DC }, textBright { 0xffF2EEE6 }, muted { 0xffA6A49F },
@@ -220,6 +223,8 @@ private:
     juce::TextButton resetButton { "Reset" };
     juce::TextButton collapseButton { juce::String::fromUTF8("\xc2\xab") }, expandButton { "Show" }; // the left side
     juce::TextButton savedButton;
+    juce::TextButton apoButton; // standalone only: send the EQ to Equalizer APO
+    juce::String shownApoError;
     juce::String loadedSavedName;      // the saved profile shown on the dropdown
     juce::String loadedSavedSelection; // headphone + profile it was loaded for
     std::unique_ptr<juce::AlertWindow> nameWindow;

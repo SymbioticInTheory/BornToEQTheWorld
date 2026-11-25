@@ -20,6 +20,18 @@ juce::Colour Theme::accent(int index) {
     return juce::Colour(colours[juce::jlimit(0, numAccents - 1, index)]);
 }
 
+// Measured: slate, or a clearer blue / neutral grey where slate would sit too close to the accent.
+juce::Colour Theme::measuredFor(int index) {
+    static const juce::uint32 colours[numAccents] = { 0xff6F8296, 0xff6F8296, 0xff4F86D6, 0xff9A9EA4 };
+    return juce::Colour(colours[juce::jlimit(0, numAccents - 1, index)]);
+}
+
+// EQ: teal against the warm and violet accents, rose against Bone.
+juce::Colour Theme::eqFor(int index) {
+    static const juce::uint32 colours[numAccents] = { 0xff3CBFA4, 0xff3CBFA4, 0xffD2607E, 0xff3CBFA4 };
+    return juce::Colour(colours[juce::jlimit(0, numAccents - 1, index)]);
+}
+
 juce::String Theme::accentName(int index) {
     static const char* names[numAccents] = { "Blood red", "Ember", "Bone", "Frost" };
     return names[juce::jlimit(0, numAccents - 1, index)];
@@ -324,7 +336,8 @@ void ResponseGraph::paint(juce::Graphics& g) {
     const auto* p = proc.selectedProfile();
     const double k = proc.amount();
     const juce::Colour curveColour = proc.params.getRawParameterValue("bypass")->load() > 0.5f ? juce::Colour(0xff6E7178) : accent;
-    const juce::Colour myEqColour = Theme::text;
+    // My EQ is off-white, except against Bone where that would match the main curve.
+    const juce::Colour myEqColour = proc.accentIndex == 2 ? juce::Colour(0xffB4A6EC) : Theme::text;
     if (proc.editingMyEq && !proc.advancedView) {
         // Editing My EQ: the correction stays in the background.
         if (p != nullptr) paintEq(g, k, juce::Colour(0xff6E7178).withAlpha(0.7f), 2.0f, false);
@@ -510,7 +523,9 @@ void ResponseGraph::paintAdvanced(juce::Graphics& g, const bteq::HeadphoneProfil
         }
     };
 
-    const juce::Colour targetColour(0xffE3B23C), measuredColour(0xff6F8296);
+    const bool bypassed = proc.params.getRawParameterValue("bypass")->load() > 0.5f;
+    const juce::Colour targetColour(0xffE3B23C), measuredColour(Theme::measuredFor(proc.accentIndex));
+    const juce::Colour eqColour = bypassed ? curveColour.withAlpha(0.55f) : Theme::eqFor(proc.accentIndex).withAlpha(0.85f);
     const bool hasMeasured = !measured.empty(), hasTarget = c.target != nullptr;
     auto visible = [this](Curve cv) { return (proc.hiddenCurves & (1 << cv)) == 0; };
 
@@ -519,7 +534,7 @@ void ResponseGraph::paintAdvanced(juce::Graphics& g, const bteq::HeadphoneProfil
         drawCurve(t, 0.0, targetColour.withAlpha(0.8f), 2.0f, true);
     }
     if (hasMeasured && visible(Measured)) drawCurve(measured, offset, measuredColour, 2.0f, false);
-    if (visible(Eq)) paintEq(g, k, curveColour.withAlpha(0.55f), 1.8f, !proc.graphicModeActive());
+    if (visible(Eq)) paintEq(g, k, eqColour, 1.8f, !proc.graphicModeActive());
     if (hasMeasured && visible(Corrected)) drawCurve(corrected, offset, curveColour, 3.0f, false);
 
     // Legend: click a name to show or hide its curve.
@@ -527,7 +542,7 @@ void ResponseGraph::paintAdvanced(juce::Graphics& g, const bteq::HeadphoneProfil
     const Item items[] = { { Target, "Target", targetColour, hasTarget },
                            { Measured, "Measured", measuredColour, hasMeasured },
                            { Corrected, "Corrected", curveColour, hasMeasured },
-                           { Eq, "EQ", curveColour.withAlpha(0.55f), true } };
+                           { Eq, "EQ", eqColour, true } };
     float x = plotArea().getX();
     g.setFont(theme.bodyFont(14.0f, true));
     for (const auto& it : items) {
@@ -1051,6 +1066,16 @@ BteqEditor::BteqEditor(BteqProcessor& p)
     content.addAndMakeVisible(bypassButton);
     bypassAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.params, "bypass", bypassButton);
 
+    // Standalone: one switch makes Equalizer APO apply the EQ to the whole system.
+    apoButton.getProperties().set("kind", "pill");
+    apoButton.setTitle("Equalizer APO");
+    apoButton.setTooltip("Send this EQ to Equalizer APO so it applies to everything you play, like Peace");
+    apoButton.onClick = [this] {
+        proc.setApoOutput(!proc.apoOutput());
+        apoButton.setToggleState(proc.apoOutput(), juce::dontSendNotification);
+    };
+    if (proc.standaloneUi) content.addAndMakeVisible(apoButton);
+
     search.setTextToShowWhenEmpty("Search headphones", Theme::muted);
     search.setFont(theme->bodyFont(16.0f));
     search.setIndents(36, 13);
@@ -1225,6 +1250,17 @@ void BteqEditor::timerCallback() {
     parametricTab.setToggleState(!graphic, juce::dontSendNotification);
     graphicTab.setToggleState(graphic, juce::dontSendNotification);
     bypassButton.setButtonText(bypassButton.getToggleState() ? "Bypassed" : "Bypass");
+    if (proc.standaloneUi) {
+        apoButton.setToggleState(proc.apoOutput(), juce::dontSendNotification);
+        const auto apoText = proc.apoOutput() ? juce::String::fromUTF8("Equalizer APO \xc2\xb7 on") : "Equalizer APO";
+        if (apoButton.getButtonText() != apoText) apoButton.setButtonText(apoText);
+        const auto error = proc.apoError();
+        if (error != shownApoError) {
+            shownApoError = error;
+            if (error.isNotEmpty())
+                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Equalizer APO", error, "OK", this);
+        }
+    }
 
     refreshEditing();
     graph.repaint();
@@ -1259,7 +1295,8 @@ void BteqEditor::paintContent(juce::Graphics& g) {
     const int titleW = (int)juce::GlyphArrangement::getStringWidth(titleFont, "Born To EQ The World");
     g.setColour(Theme::muted);
     g.setFont(theme->labelFont(15.0f));
-    g.drawText("HEADPHONE CORRECTION", 26 + titleW + 18, 27, 260, 24, juce::Justification::centredLeft);
+    if (!proc.standaloneUi) // the standalone has its Equalizer APO switch here
+        g.drawText("HEADPHONE CORRECTION", 26 + titleW + 18, 27, 260, 24, juce::Justification::centredLeft);
 
     const double pre = proc.currentPreampDb() * (proc.params.getRawParameterValue("bypass")->load() > 0.5f ? 0.0 : 1.0);
     g.setFont(theme->labelFont(16.0f));
@@ -1418,6 +1455,7 @@ void BteqEditor::layoutContent() {
     preampValue.setBounds(808, 20, 100, 32);
     resetButton.setBounds(rFilters.getRight() - 12 - 64, rFilters.getBottom() - 12 - 20, 64, 22);
     savedButton.setBounds(462, 18, 210, 36);
+    apoButton.setBounds(savedButton.getX() - 18 - 160, 21, 160, 30);
     const int dot = 20, dotGap = 6, dotsW = Theme::numAccents * dot + (Theme::numAccents - 1) * dotGap;
     for (int i = 0; i < Theme::numAccents; ++i)
         swatches[(size_t)i].setBounds(rColour.getX() + (rColour.getWidth() - dotsW) / 2 + i * (dot + dotGap),
