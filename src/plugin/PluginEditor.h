@@ -63,7 +63,9 @@ public:
     void mouseDrag(const juce::MouseEvent&) override;
     void mouseUp(const juce::MouseEvent&) override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+    void refreshMyEqButton();
     juce::Colour accent;
+    std::function<void()> onMyEqToggled;
 
 private:
     juce::Rectangle<float> plotArea() const;
@@ -74,10 +76,14 @@ private:
     double rangeDb() const { return proc.advancedView ? 18.0 : 12.0; }
     void paintAdvanced(juce::Graphics&, const bteq::HeadphoneProfile&, double k, juce::Colour curveColour);
     void paintEq(juce::Graphics&, double k, juce::Colour colour, float width, bool nodes);
+    void paintMyEq(juce::Graphics&, juce::Colour colour, float width, bool nodes, bool dashed);
+    void paintNodes(juce::Graphics&, const std::vector<bteq::FilterSpec>& filters, double k, juce::Colour colour);
+    std::vector<bteq::FilterSpec> nodeFilters(double& k) const; // the points that can be dragged now
+    void setNodeFilter(int index, const bteq::FilterSpec& f);
     int dragIndex = -1;
     BteqProcessor& proc;
     const Theme& theme;
-    juce::TextButton advancedButton { "Advanced" };
+    juce::TextButton advancedButton { "Advanced" }, myEqButton { "My EQ" };
     std::unique_ptr<juce::SharedResourcePointer<CurvesHolder>> curves; // loaded on first use
     enum Curve { Target, Measured, Corrected, Eq, numCurves };
     std::array<juce::Rectangle<float>, numCurves> legendHit;
@@ -91,10 +97,13 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
     void refresh(); // update the values from the processor (message thread)
+    void mouseDown(const juce::MouseEvent&) override; // click a My EQ band's type to change it
     juce::Colour accent;
 
 private:
     enum Field { Freq, Gain, Q, numFields };
+    std::vector<bteq::FilterSpec> shownFilters() const;
+    juce::TextButton myEqOnButton { "On" };
     juce::Rectangle<int> cardBounds(int i) const;
     void commit(int card, Field field, const juce::String& text);
     BteqProcessor& proc;
@@ -174,6 +183,8 @@ private:
     juce::SharedResourcePointer<Theme> theme;
     BteqLookAndFeel lnf;
     juce::Image background;
+    juce::Image titleImage; // the Death-style title, redrawn when the colour changes
+    juce::Rectangle<float> titleArea;
     Content content { *this };
     ValueKnob preampKnob;
 

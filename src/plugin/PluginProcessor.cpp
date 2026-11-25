@@ -83,6 +83,7 @@ BteqProcessor::BteqProcessor()
     bypassParam = params.getRawParameterValue(kBypass);
     modeParam = params.getRawParameterValue(kMode);
     trimParam = params.getRawParameterValue(kTrim);
+    myEqSettings.bands = defaultMyEqBands();
     startTimerHz(30);
 }
 
@@ -326,15 +327,77 @@ void BteqProcessor::resetEdits() {
 }
 
 // ---------------------------------------------------------------------------
+// My EQ (message thread)
+// ---------------------------------------------------------------------------
+std::vector<bteq::FilterSpec> BteqProcessor::defaultMyEqBands() {
+    using T = bteq::FilterType;
+    const std::pair<T, double> bands[] = { { T::LowShelf, 105 }, { T::Peaking, 200 },  { T::Peaking, 500 },
+                                           { T::Peaking, 1000 }, { T::Peaking, 2000 }, { T::Peaking, 4000 },
+                                           { T::Peaking, 8000 }, { T::HighShelf, 10000 } };
+    std::vector<bteq::FilterSpec> out;
+    for (const auto& [type, fc] : bands) {
+        bteq::FilterSpec f;
+        f.type = type;
+        f.fc = fc;
+        f.gainDb = 0;
+        f.q = type == T::Peaking ? 1.0 : 0.7;
+        out.push_back(f);
+    }
+    return out;
+}
+
+BteqProcessor::MyEq BteqProcessor::myEq() const {
+    const juce::ScopedLock sl(buildLock);
+    return myEqSettings;
+}
+
+void BteqProcessor::setMyEqBand(int index, const bteq::FilterSpec& spec) {
+    const juce::ScopedLock sl(buildLock);
+    if (index < 0 || index >= (int)myEqSettings.bands.size()) return;
+    myEqSettings.bands[(size_t)index] = spec;
+    ++myEqVersion;
+    rebuild(false);
+}
+
+void BteqProcessor::setMyEqOn(bool on) {
+    const juce::ScopedLock sl(buildLock);
+    myEqSettings.on = on;
+    ++myEqVersion;
+    rebuild(false);
+}
+
+void BteqProcessor::resetMyEq() {
+    const juce::ScopedLock sl(buildLock);
+    myEqSettings.bands = defaultMyEqBands();
+    ++myEqVersion;
+    rebuild(false);
+}
+
+bool BteqProcessor::myEqEdited() const {
+    const juce::ScopedLock sl(buildLock);
+    for (const auto& b : myEqSettings.bands)
+        if (std::abs(b.gainDb) > 0.01) return true;
+    return false;
+}
+
+bool BteqProcessor::myEqActive() const { return myEqSettings.on && myEqEdited(); }
+
+// ---------------------------------------------------------------------------
 // Engine building (message thread, or prepareToPlay)
 // ---------------------------------------------------------------------------
 void BteqProcessor::timerCallback() {
     rebuild(false);
-    freeRetiredGraphic();
+    freeAllRetired();
 }
 
 void BteqProcessor::rebuild(bool force) {
     const juce::ScopedLock sl(buildLock);
+    if (force || myEqVersion != builtMyEqVersion || !juce::exactlyEqual(sampleRate, builtMyEqRate)) {
+        buildMyEq(sampleRate);
+        builtMyEqVersion = myEqVersion;
+        builtMyEqRate = sampleRate;
+    }
+
     const auto* p = selectedProfile();
     const double k = juce::jlimit(0.0, 1.0, (double)amountParam->load() / 100.0);
     const bool graphic = graphicModeActive();
@@ -354,17 +417,24 @@ void BteqProcessor::rebuild(bool force) {
     builtEditVersion = editVersion;
 }
 
-void BteqProcessor::buildParametric(const bteq::HeadphoneProfile*, double k, double sr) {
-    auto eq = std::make_unique<bteq::ParametricEq>();
-    const auto preset = effectiveParametric(); // flat when nothing is selected
-    // Preamp scales with the correction amount; at 100% it is exactly the published value.
-    eq->prepare(preset, sr, 2, k, /*autoPreamp*/ false);
-    preampDb = eq->getPreampDb();
+template <class E> void BteqProcessor::publish(EngineSlot<E>& slot, std::unique_ptr<E> engine) {
+    freeAllRetired();
+    std::unique_ptr<E> replaced; // an older engine that never got used is freed here, outside the lock
     {
         const juce::SpinLock::ScopedLockType lock(swapLock);
-        pendingEq = std::move(eq);
-        pendingReady = true;
+        replaced = std::move(slot.pending);
+        slot.pending = std::move(engine);
+        slot.pendingReady = true;
     }
+}
+
+void BteqProcessor::buildParametric(const bteq::HeadphoneProfile*, double k, double sr) {
+    auto engine = std::make_unique<IirEngine>();
+    const auto preset = effectiveParametric(); // flat when nothing is selected
+    // Preamp scales with the correction amount; at 100% it is exactly the published value.
+    engine->eq.prepare(preset, sr, 2, k, /*autoPreamp*/ false);
+    preampDb = engine->eq.getPreampDb();
+    publish(eqSlot, std::move(engine));
     graphicReady = false;
 }
 
@@ -386,113 +456,154 @@ void BteqProcessor::buildGraphic(const bteq::HeadphoneProfile*, double k, double
                                      juce::dsp::Convolution::Trim::no, juce::dsp::Convolution::Normalise::no);
     engine->blockSize = juce::jmax(1, maxBlock);
     engine->conv.prepare({ sr, (juce::uint32)engine->blockSize, 2 });
-    freeRetiredGraphic();
-    {
-        const juce::SpinLock::ScopedLockType lock(swapLock);
-        pendingGraphic = std::move(engine); // an older pending one is freed here, on this thread
-        pendingGraphicReady = true;
-    }
+    publish(graphicSlot, std::move(engine));
     preampDb = pre * k; // already inside the filter; shown so both modes read the same way
     graphicReady = true;
 }
 
-void BteqProcessor::freeRetiredGraphic() {
-    std::array<std::unique_ptr<GraphicEngine>, 8> toFree;
+void BteqProcessor::buildMyEq(double sr) {
+    bteq::ParametricPreset preset;
+    if (myEqSettings.on)
+        for (const auto& b : myEqSettings.bands)
+            if (std::abs(b.gainDb) > 0.01) preset.filters.push_back(b);
+    auto engine = std::make_unique<IirEngine>();
+    // Its own headroom: the level drops by its highest boost, so it can't clip
+    // more than the correction alone.
+    engine->eq.prepare(preset, sr, 2, 1.0, /*autoPreamp*/ true);
+    myEqPreampDb = preset.filters.empty() ? 0.0 : engine->eq.getPreampDb();
+    myEqRunning = !preset.filters.empty();
+    publish(extraSlot, std::move(engine));
+}
+
+template <class E> void BteqProcessor::freeRetired(EngineSlot<E>& slot) {
+    std::array<std::unique_ptr<E>, 8> toFree;
     {
         const juce::SpinLock::ScopedLockType lock(swapLock);
-        for (size_t i = 0; i < retiredGraphic.size(); ++i) toFree[i] = std::move(retiredGraphic[i]);
+        for (size_t i = 0; i < slot.retired.size(); ++i) toFree[i] = std::move(slot.retired[i]);
     }
+}
+
+void BteqProcessor::freeAllRetired() {
+    freeRetired(eqSlot);
+    freeRetired(graphicSlot);
+    freeRetired(extraSlot);
 }
 
 void BteqProcessor::prepareToPlay(double sr, int samplesPerBlock) {
     sampleRate = sr;
     maxBlock = samplesPerBlock;
     fadeBuffer.setSize(2, juce::jmax(1, samplesPerBlock));
+    fadeLength = juce::jmax(1, juce::roundToInt(sr * 0.02));
     trimGain.reset(sr, 0.02);
     trimGain.setCurrentAndTargetValue(juce::Decibels::decibelsToGain(trimParam->load()));
     rebuild(true);
-    // Take the freshly built parametric engine immediately (audio is stopped here).
+    // Take the freshly built engines immediately (audio is stopped here).
     const juce::SpinLock::ScopedLockType lock(swapLock);
-    if (pendingReady) {
-        std::swap(activeEq, pendingEq);
-        pendingReady = false;
-    }
-    if (activeEq) activeEq->reset();
-    if (pendingGraphicReady) {
-        std::swap(activeGraphic, pendingGraphic);
-        pendingGraphicReady = false;
-    }
-    fadingGraphic.reset();
+    auto install = [](auto& slot) {
+        if (slot.pendingReady) {
+            std::swap(slot.active, slot.pending);
+            slot.pendingReady = false;
+        }
+        if (slot.active) slot.active->reset();
+        slot.fading.reset();
+        slot.usedLastBlock = false;
+    };
+    install(eqSlot);
+    install(graphicSlot);
+    install(extraSlot);
 }
 
 // ---------------------------------------------------------------------------
 // Audio thread
 // ---------------------------------------------------------------------------
+
+// Called with swapLock held. Takes a new engine only when the last crossfade
+// is done and there is somewhere to hand the old engine back for freeing.
+template <class E> void BteqProcessor::takePending(EngineSlot<E>& slot) {
+    if (!slot.pendingReady || slot.fading != nullptr) return;
+    const auto free = std::find(slot.retired.begin(), slot.retired.end(), nullptr);
+    if (free == slot.retired.end()) return;
+    auto old = std::move(slot.active);
+    slot.active = std::move(slot.pending);
+    slot.pendingReady = false;
+    if (old == nullptr) return;
+    if (slot.usedLastBlock) {
+        slot.fading = std::move(old); // fade from it so the change is smooth
+        slot.fadePos = 0;
+    } else {
+        *free = std::move(old); // not playing: nothing to fade from
+    }
+}
+
+template <class E>
+void BteqProcessor::runSlot(EngineSlot<E>& slot, juce::AudioBuffer<float>& buffer, int chans, int n) {
+    if (!slot.usedLastBlock) slot.active->reset(); // coming back after a pause: start clean
+    const bool fade = slot.fading != nullptr && slot.fadePos < fadeLength && n <= fadeBuffer.getNumSamples();
+    if (fade)
+        for (int ch = 0; ch < chans; ++ch) fadeBuffer.copyFrom(ch, 0, buffer, ch, 0, n);
+    slot.active->process(buffer.getArrayOfWritePointers(), chans, n);
+    if (fade) {
+        // The old filter fades out while the new one fades in.
+        slot.fading->process(fadeBuffer.getArrayOfWritePointers(), chans, n);
+        for (int ch = 0; ch < chans; ++ch) {
+            auto* out = buffer.getWritePointer(ch);
+            const auto* prev = fadeBuffer.getReadPointer(ch);
+            for (int i = 0; i < n; ++i) {
+                const float t = juce::jmin(1.0f, (float)(slot.fadePos + i + 1) / (float)fadeLength);
+                out[i] = out[i] * t + prev[i] * (1.0f - t);
+            }
+        }
+        slot.fadePos += n;
+    } else if (slot.fading != nullptr) {
+        slot.fadePos = fadeLength; // block too large to fade: switch straight over
+    }
+}
+
+// Hands a finished (or unused) fading engine back to the message thread.
+template <class E> void BteqProcessor::retireFading(EngineSlot<E>& slot, bool usedThisBlock) {
+    slot.usedLastBlock = usedThisBlock;
+    if (slot.fading == nullptr || (usedThisBlock && slot.fadePos < fadeLength)) return;
+    const juce::SpinLock::ScopedTryLockType lock(swapLock);
+    if (!lock.isLocked()) return;
+    const auto free = std::find(slot.retired.begin(), slot.retired.end(), nullptr);
+    if (free != slot.retired.end()) *free = std::move(slot.fading);
+}
+
 void BteqProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) {
     juce::ScopedNoDenormals noDenormals;
     const int numIn = getTotalNumInputChannels(), numOut = getTotalNumOutputChannels();
     const int n = buffer.getNumSamples();
     for (int ch = numIn; ch < numOut; ++ch) buffer.clear(ch, 0, n);
 
-    if (pendingReady.load() || pendingGraphicReady.load()) {
+    if (eqSlot.pendingReady.load() || graphicSlot.pendingReady.load() || extraSlot.pendingReady.load()) {
         const juce::SpinLock::ScopedTryLockType lock(swapLock);
         if (lock.isLocked()) {
-            if (pendingReady) {
-                std::swap(activeEq, pendingEq);
-                pendingReady = false;
-            }
-            // Take a new graphic engine only when the last crossfade is done and
-            // there is somewhere to hand an old engine back for freeing.
-            auto slot = std::find(retiredGraphic.begin(), retiredGraphic.end(), nullptr);
-            if (pendingGraphicReady && fadingGraphic == nullptr && slot != retiredGraphic.end()) {
-                fadingGraphic = std::move(activeGraphic);
-                activeGraphic = std::move(pendingGraphic);
-                pendingGraphicReady = false;
-            }
+            takePending(eqSlot);
+            takePending(graphicSlot);
+            takePending(extraSlot);
         }
     }
 
     const bool bypass = bypassParam->load() > 0.5f;
-    const bool graphic = graphicReady.load();
+    const int chans = juce::jmin(buffer.getNumChannels(), 2);
+    bool usedGraphic = false, usedEq = false, usedExtra = false;
     if (!bypass) {
-        if (graphic && activeGraphic != nullptr) {
-            // Coming from parametric or bypass there is nothing to fade from.
-            if (!lastBlockGraphic) activeGraphic->conv.reset();
-            const int chans = juce::jmin(buffer.getNumChannels(), 2);
-            const bool fade = lastBlockGraphic && fadingGraphic != nullptr && n <= fadeBuffer.getNumSamples();
-            if (fade)
-                for (int ch = 0; ch < chans; ++ch) fadeBuffer.copyFrom(ch, 0, buffer, ch, 0, n);
-            juce::dsp::AudioBlock<float> block(buffer.getArrayOfWritePointers(), (size_t)chans, (size_t)n);
-            activeGraphic->process(block);
-            if (fade) {
-                // Old filter fades out while the new one fades in.
-                juce::dsp::AudioBlock<float> old(fadeBuffer.getArrayOfWritePointers(), (size_t)chans, (size_t)n);
-                fadingGraphic->process(old);
-                for (int ch = 0; ch < chans; ++ch) {
-                    auto* out = buffer.getWritePointer(ch);
-                    const auto* prev = fadeBuffer.getReadPointer(ch);
-                    for (int i = 0; i < n; ++i) {
-                        const float t = (float)(i + 1) / (float)n;
-                        out[i] = out[i] * t + prev[i] * (1.0f - t);
-                    }
-                }
-            }
-        } else if (activeEq) {
-            if (lastBlockGraphic) activeEq->reset();
-            const int chans = juce::jmin(buffer.getNumChannels(), activeEq->numChannels());
-            for (int ch = 0; ch < chans; ++ch) activeEq->processChannel(ch, buffer.getWritePointer(ch), n);
+        if (graphicReady.load() && graphicSlot.active != nullptr) {
+            runSlot(graphicSlot, buffer, chans, n);
+            usedGraphic = true;
+        } else if (eqSlot.active != nullptr) {
+            runSlot(eqSlot, buffer, chans, n);
+            usedEq = true;
+        }
+        // My EQ, on top of the correction. Kept running while its last change fades out.
+        if (extraSlot.active != nullptr && (myEqRunning.load() || extraSlot.fading != nullptr)) {
+            runSlot(extraSlot, buffer, chans, n);
+            usedExtra = true;
         }
     }
-    lastBlockGraphic = graphic && !bypass;
-
-    if (fadingGraphic != nullptr) {
-        // Hand the old engine back to the message thread to be freed.
-        const juce::SpinLock::ScopedTryLockType lock(swapLock);
-        if (lock.isLocked()) {
-            auto slot = std::find(retiredGraphic.begin(), retiredGraphic.end(), nullptr);
-            if (slot != retiredGraphic.end()) *slot = std::move(fadingGraphic);
-        }
-    }
+    retireFading(graphicSlot, usedGraphic);
+    retireFading(eqSlot, usedEq);
+    retireFading(extraSlot, usedExtra);
 
     trimGain.setTargetValue(juce::Decibels::decibelsToGain(trimParam->load()));
     trimGain.applyGain(buffer, n);
@@ -507,12 +618,16 @@ void BteqProcessor::getStateInformation(juce::MemoryBlock& destData) {
     const auto* p = selectedProfile();
     state.setProperty("profile", p ? profileKey(*p) : juce::String(), nullptr);
     state.setProperty("accent", accentIndex, nullptr);
+    state.setProperty("accentOrder", 2, nullptr);
     state.setProperty("advanced", advancedView, nullptr);
     state.setProperty("hiddenCurves", hiddenCurves, nullptr);
     state.setProperty("uiScale", uiScale, nullptr);
     state.setProperty("match", matchName, nullptr);
+    state.setProperty("editingMyEq", editingMyEq, nullptr);
     {
         const juce::ScopedLock sl(buildLock);
+        state.setProperty("myEq", filtersToString(myEqSettings.bands), nullptr);
+        state.setProperty("myEqOn", myEqSettings.on, nullptr);
         juce::ValueTree list("EDITS");
         for (const auto& [key, e] : edits) {
             if (!e.filtersEdited && !e.preampEdited) continue;
@@ -543,9 +658,13 @@ void BteqProcessor::setStateInformation(const void* data, int sizeInBytes) {
     }
     headphoneName = state.getProperty("headphone").toString();
     accentIndex = (int)state.getProperty("accent", 0);
+    // Sessions from before red became the first colour had Ember first and Blood red second.
+    if (!state.hasProperty("accentOrder") && accentIndex == 1) accentIndex = 0;
     advancedView = (bool)state.getProperty("advanced", false);
     hiddenCurves = (int)state.getProperty("hiddenCurves", 0);
     uiScale = (float)state.getProperty("uiScale", 0.0);
+    editingMyEq = (bool)state.getProperty("editingMyEq", false);
+    readMyEq(state);
     profileIndex = indexForKey(headphoneName, state.getProperty("profile").toString());
     {
         const juce::ScopedLock sl(buildLock);
@@ -573,6 +692,9 @@ juce::ValueTree BteqProcessor::makeSnapshot() const {
     t.setProperty("amount", (double)amountParam->load(), nullptr);
     t.setProperty("match", matchName, nullptr);
     if (const auto* e = currentEdit()) writeEdit(t, *e);
+    const auto mine = myEq();
+    t.setProperty("myEq", filtersToString(mine.bands), nullptr);
+    t.setProperty("myEqOn", mine.on, nullptr);
     return t;
 }
 
@@ -593,8 +715,20 @@ void BteqProcessor::loadSnapshot(const juce::ValueTree& t) {
         if (e.filtersEdited || e.preampEdited) edits[key] = e;
         else edits.erase(key);
     }
+    readMyEq(t);
     ++editVersion;
     rebuild(false);
+}
+
+// Reads My EQ from a session or saved profile; older ones without it leave it as it is.
+void BteqProcessor::readMyEq(const juce::ValueTree& t) {
+    if (!t.hasProperty("myEq")) return;
+    const juce::ScopedLock sl(buildLock);
+    auto bands = filtersFromString(t.getProperty("myEq").toString());
+    if (bands.size() != defaultMyEqBands().size()) bands = defaultMyEqBands();
+    myEqSettings.bands = bands;
+    myEqSettings.on = (bool)t.getProperty("myEqOn", true);
+    ++myEqVersion;
 }
 
 juce::AudioProcessorEditor* BteqProcessor::createEditor() { return new BteqEditor(*this); }
