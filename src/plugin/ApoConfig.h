@@ -22,7 +22,7 @@ inline const std::string kInclude = "Include: " + kFileName;
 inline const std::string kMark = "# [BEQ] ";
 inline const std::string kHeader =
     "# Born To EQ The World sends its EQ through the file below. Lines marked [BEQ] were switched off by it "
-    "and come back when you turn Equalizer APO off in BEQ.";
+    "(VST plugins below stay on and run after BEQ) and come back when you turn Equalizer APO off in BEQ.";
 
 // Number with up to `decimals` places, without trailing zeros.
 inline std::string num(double v, int decimals) {
@@ -88,7 +88,8 @@ inline bool isOurLine(const std::string& line) {
     std::string inc = kInclude, head = kHeader;
     std::transform(inc.begin(), inc.end(), inc.begin(), [](unsigned char c) { return (char)std::tolower(c); });
     std::transform(head.begin(), head.end(), head.begin(), [](unsigned char c) { return (char)std::tolower(c); });
-    return t == inc || t == head;
+    // Any version of the header (its wording may change between releases).
+    return t == inc || t == head || t.rfind("# born to eq the world sends its eq", 0) == 0;
 }
 
 inline std::string joinLines(const std::vector<std::string>& lines) {
@@ -97,15 +98,27 @@ inline std::string joinLines(const std::vector<std::string>& lines) {
     return s;
 }
 
+// A VST plugin loaded by APO (e.g. one added in its Configuration Editor).
+inline bool isPluginLine(const std::string& line) {
+    std::string t = trim(line);
+    std::transform(t.begin(), t.end(), t.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+    return t.rfind("vstplugin:", 0) == 0;
+}
+
 // config.txt with BEQ's file included and every other active line (Peace's
 // include, filters, device selections) commented out, so only BEQ's EQ applies.
+// VST plugins stay on and run after BEQ's EQ, since BEQ's file is included first.
 // Running it again changes nothing.
 inline std::string takeOver(const std::string& config) {
     std::vector<std::string> out { kHeader, kInclude };
     for (const auto& line : splitLines(config)) {
         if (isOurLine(line)) continue;
+        if (line.rfind(kMark, 0) == 0 && isPluginLine(line.substr(kMark.size()))) {
+            out.push_back(line.substr(kMark.size())); // switched off by an earlier version of BEQ
+            continue;
+        }
         const auto t = trim(line);
-        out.push_back(t.empty() || t[0] == '#' ? line : kMark + line);
+        out.push_back(t.empty() || t[0] == '#' || isPluginLine(line) ? line : kMark + line);
     }
     return joinLines(out);
 }

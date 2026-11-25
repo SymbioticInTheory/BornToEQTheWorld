@@ -45,6 +45,26 @@ int main() {
     check(apo::restore(later).find("Preamp: -3 dB\r\nInclude: peace.txt\r\n") != std::string::npos, "lines added later survive");
     check(later.find(apo::kMark + "Include: peace.txt\r\n" + apo::kMark) == std::string::npos, "new line marked once");
 
+    // VST plugins (CanOpener, say) stay on and come after BEQ's include, so they run after its EQ.
+    const std::string withPlugin = "Include: peace.txt\nVSTPlugin: Library \"C:\\VST\\CanOpener.dll\" ChunkData \"abc=\"\n";
+    const auto takenPlugin = apo::takeOver(withPlugin);
+    same(takenPlugin, apo::kHeader + "\r\n" + apo::kInclude + "\r\n" + apo::kMark + "Include: peace.txt\r\n" +
+                          "VSTPlugin: Library \"C:\\VST\\CanOpener.dll\" ChunkData \"abc=\"\r\n",
+         "plugin lines stay active");
+    same(apo::restore(takenPlugin), apo::joinLines(apo::splitLines(withPlugin)), "restore with a plugin");
+    // A plugin line switched off by the first version of BEQ comes back on.
+    same(apo::takeOver(apo::kMark + "VSTPlugin: Library \"x.dll\"\n"),
+         apo::kHeader + "\r\n" + apo::kInclude + "\r\nVSTPlugin: Library \"x.dll\"\r\n", "old marked plugin line comes back");
+
+    // Several plugins all stay on, in their order.
+    const auto two = apo::takeOver("VSTPlugin: Library \"CanOpener.dll\"\nVSTPlugin: Library \"SPAN.dll\"\n");
+    check(two.find("\r\nVSTPlugin: Library \"CanOpener.dll\"\r\nVSTPlugin: Library \"SPAN.dll\"\r\n") != std::string::npos,
+          "two plugins stay on in order");
+
+    // The header written by an older BEQ is replaced, not kept as a stray comment.
+    same(apo::restore("# Born To EQ The World sends its EQ through the file below. Old wording.\r\n" + apo::kInclude + "\r\nPreamp: 1 dB\r\n"),
+         "Preamp: 1 dB\r\n", "old header recognised");
+
     std::printf(failures == 0 ? "All APO config checks passed\n" : "%d APO config checks failed\n", failures);
     return failures == 0 ? 0 : 1;
 }
