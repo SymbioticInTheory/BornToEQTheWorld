@@ -16,12 +16,12 @@ Theme::Theme() {
 }
 
 juce::Colour Theme::accent(int index) {
-    static const juce::uint32 colours[numAccents] = { 0xffE46A2E, 0xffC42B2B, 0xffD9D5CD, 0xff8FA3B0 };
+    static const juce::uint32 colours[numAccents] = { 0xffC42B2B, 0xffE46A2E, 0xffD9D5CD, 0xff7D78D6 };
     return juce::Colour(colours[juce::jlimit(0, numAccents - 1, index)]);
 }
 
 juce::String Theme::accentName(int index) {
-    static const char* names[numAccents] = { "Ember", "Blood red", "Bone", "Steel blue" };
+    static const char* names[numAccents] = { "Blood red", "Ember", "Bone", "Frost" };
     return names[juce::jlimit(0, numAccents - 1, index)];
 }
 
@@ -236,8 +236,21 @@ ResponseGraph::ResponseGraph(BteqProcessor& p, const Theme& t) : proc(p), theme(
     advancedButton.setTooltip("Show the target, your headphone's measurement and the corrected result");
     advancedButton.onClick = [this] { setAdvanced(advancedButton.getToggleState()); };
     addAndMakeVisible(advancedButton);
+    myEqButton.getProperties().set("kind", "pill");
+    myEqButton.setClickingTogglesState(true);
+    myEqButton.setTooltip("Your own EQ on top of the correction. Turn on to edit it here and in the cards below.");
+    myEqButton.onClick = [this] {
+        proc.editingMyEq = myEqButton.getToggleState();
+        dragIndex = -1;
+        repaint();
+        if (onMyEqToggled) onMyEqToggled();
+    };
+    addAndMakeVisible(myEqButton);
+    refreshMyEqButton();
     setAdvanced(proc.advancedView);
 }
+
+void ResponseGraph::refreshMyEqButton() { myEqButton.setToggleState(proc.editingMyEq, juce::dontSendNotification); }
 
 void ResponseGraph::setAdvanced(bool on) {
     proc.advancedView = on;
@@ -246,7 +259,10 @@ void ResponseGraph::setAdvanced(bool on) {
     repaint();
 }
 
-void ResponseGraph::resized() { advancedButton.setBounds(getWidth() - 96, 2, 96, 24); }
+void ResponseGraph::resized() {
+    advancedButton.setBounds(getWidth() - 96, 2, 96, 24);
+    myEqButton.setBounds(getWidth() - 96 - 8 - 76, 2, 76, 24);
+}
 
 juce::Rectangle<float> ResponseGraph::plotArea() const {
     return getLocalBounds().toFloat().withTrimmedLeft(34).withTrimmedBottom(22).withTrimmedTop(38).withTrimmedRight(6);
@@ -291,9 +307,17 @@ void ResponseGraph::paint(juce::Graphics& g) {
     const auto* p = proc.selectedProfile();
     const double k = proc.amount();
     const juce::Colour curveColour = proc.params.getRawParameterValue("bypass")->load() > 0.5f ? juce::Colour(0xff6E7178) : accent;
+    const juce::Colour myEqColour = Theme::text;
+    if (proc.editingMyEq && !proc.advancedView) {
+        // Editing My EQ: the correction stays in the background.
+        if (p != nullptr) paintEq(g, k, juce::Colour(0xff6E7178).withAlpha(0.7f), 2.0f, false);
+        paintMyEq(g, curveColour, 3.0f, true, false);
+        return;
+    }
     if (p == nullptr) {
         g.setColour(curveColour);
         g.drawLine(a.getX(), yOf(0), a.getRight(), yOf(0), 3.0f);
+        if (proc.myEqActive()) paintMyEq(g, myEqColour.withAlpha(0.6f), 1.8f, false, true);
         g.setColour(Theme::soft);
         g.setFont(theme.bodyFont(15.0f));
         g.drawText("Search for your headphones to start", a.withTrimmedTop(a.getHeight() * 0.25f).withHeight(24),
@@ -302,9 +326,56 @@ void ResponseGraph::paint(juce::Graphics& g) {
     }
     if (proc.advancedView) {
         paintAdvanced(g, *p, k, curveColour);
+        if (proc.editingMyEq) paintMyEq(g, myEqColour, 2.4f, true, false);
         return;
     }
     paintEq(g, k, curveColour, 3.0f, true);
+    if (proc.myEqActive()) paintMyEq(g, myEqColour.withAlpha(0.6f), 1.8f, false, true);
+}
+
+// My EQ's curve (without its headroom), dashed when it is only shown for reference.
+void ResponseGraph::paintMyEq(juce::Graphics& g, juce::Colour colour, float width, bool nodes, bool dashed) {
+    const auto mine = proc.myEq();
+    std::vector<bteq::BiquadCoeffs> coeffs;
+    if (mine.on)
+        for (const auto& f : mine.bands)
+            if (std::abs(f.gainDb) > 0.01) coeffs.push_back(bteq::BiquadCoeffs::make(f.type, f.fc, f.gainDb, f.q, 48000.0));
+    juce::Path curve;
+    const int points = 300;
+    for (int i = 0; i <= points; ++i) {
+        const double f = 20.0 * std::pow(1000.0, i / (double)points);
+        double db = 0;
+        for (const auto& c : coeffs) db += c.magnitudeDb(f, 48000.0);
+        const float x = xOf(f), y = yOf(db);
+        i == 0 ? curve.startNewSubPath(x, y) : curve.lineTo(x, y);
+    }
+    const juce::PathStrokeType stroke(width, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+    g.setColour(mine.on ? colour : colour.withAlpha(0.35f));
+    if (dashed) {
+        juce::Path d;
+        const float dashes[] = { 6.0f, 5.0f };
+        stroke.createDashedStroke(d, curve, dashes, 2);
+        g.fillPath(d);
+    } else {
+        g.strokePath(curve, stroke);
+    }
+    if (nodes) paintNodes(g, mine.bands, 1.0, mine.on ? colour : colour.withAlpha(0.5f));
+}
+
+void ResponseGraph::paintNodes(juce::Graphics& g, const std::vector<bteq::FilterSpec>& filters, double k, juce::Colour colour) {
+    int num = 1;
+    g.setFont(theme.labelFont(12.0f));
+    for (const auto& f : filters) {
+        if (f.type == bteq::FilterType::LowPass) { ++num; continue; }
+        const auto pos = nodePosition(f, k);
+        const float x = pos.x, y = pos.y;
+        g.setColour(num - 1 == dragIndex ? colour.withAlpha(0.45f) : juce::Colour(0xff0B0C0D));
+        g.fillEllipse(x - 9, y - 9, 18, 18);
+        g.setColour(colour);
+        g.drawEllipse(x - 9, y - 9, 18, 18, 2.0f);
+        g.setColour(Theme::textBright);
+        g.drawText(juce::String(num++), juce::Rectangle<float>(x - 9, y - 9, 18, 18), juce::Justification::centred);
+    }
 }
 
 // The EQ curve (without preamp), and in parametric mode its numbered points.
@@ -345,21 +416,7 @@ void ResponseGraph::paintEq(juce::Graphics& g, double k, juce::Colour colour, fl
     }
     g.setColour(colour);
     g.strokePath(curve, juce::PathStrokeType(width, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-    if (!nodes) return;
-
-    int num = 1;
-    g.setFont(theme.labelFont(12.0f));
-    for (const auto& f : preset.filters) {
-        if (f.type == bteq::FilterType::LowPass) { ++num; continue; }
-        const auto pos = nodePosition(f, k);
-        const float x = pos.x, y = pos.y;
-        g.setColour(num - 1 == dragIndex ? colour.withAlpha(0.45f) : juce::Colour(0xff0B0C0D));
-        g.fillEllipse(x - 9, y - 9, 18, 18);
-        g.setColour(colour);
-        g.drawEllipse(x - 9, y - 9, 18, 18, 2.0f);
-        g.setColour(Theme::textBright);
-        g.drawText(juce::String(num++), juce::Rectangle<float>(x - 9, y - 9, 18, 18), juce::Justification::centred);
-    }
+    if (nodes && !proc.editingMyEq) paintNodes(g, preset.filters, k, colour);
 }
 
 // Target, measured and corrected curves like autoeq.app. The corrected curve
@@ -392,12 +449,21 @@ void ResponseGraph::paintAdvanced(juce::Graphics& g, const bteq::HeadphoneProfil
         }
     }
 
+    // What you hear also includes My EQ.
+    std::vector<double> mine(freqs.size(), 0.0);
+    if (const auto my = proc.myEq(); my.on)
+        for (const auto& f : my.bands) {
+            if (std::abs(f.gainDb) <= 0.01) continue;
+            const auto co = bteq::BiquadCoeffs::make(f.type, f.fc, f.gainDb, f.q, 48000.0);
+            for (size_t i = 0; i < mine.size(); ++i) mine[i] += co.magnitudeDb(freqs[i], 48000.0);
+        }
+
     std::vector<double> measured, corrected;
     double offset = 0;
     if (c.measured != nullptr && c.measured->size() == freqs.size()) {
         for (size_t i = 0; i < freqs.size(); ++i) {
             measured.push_back((*c.measured)[i]);
-            corrected.push_back((*c.measured)[i] + eq[i]);
+            corrected.push_back((*c.measured)[i] + eq[i] + mine[i]);
         }
         if (c.target != nullptr) {
             double sum = 0;
@@ -474,15 +540,29 @@ juce::Point<float> ResponseGraph::nodePosition(const bteq::FilterSpec& f, double
     return { juce::jmax(plotArea().getX() + 9.0f, xOf(f.fc)), yOf(f.gainDb * k) };
 }
 
+std::vector<bteq::FilterSpec> ResponseGraph::nodeFilters(double& k) const {
+    if (proc.editingMyEq) {
+        k = 1.0;
+        return proc.myEq().bands;
+    }
+    k = proc.amount();
+    if (proc.selectedProfile() == nullptr || proc.graphicModeActive()) return {};
+    if (proc.advancedView && (proc.hiddenCurves & (1 << Eq)) != 0) return {};
+    return proc.effectiveParametric().filters;
+}
+
+void ResponseGraph::setNodeFilter(int index, const bteq::FilterSpec& f) {
+    if (proc.editingMyEq) proc.setMyEqBand(index, f);
+    else proc.setFilter(index, f);
+}
+
 int ResponseGraph::nodeAt(juce::Point<float> pos) const {
-    if (proc.selectedProfile() == nullptr || proc.graphicModeActive()) return -1;
-    if (proc.advancedView && (proc.hiddenCurves & (1 << Eq)) != 0) return -1;
-    const auto preset = proc.effectiveParametric();
-    const double k = proc.amount();
+    double k = 1.0;
+    const auto filters = nodeFilters(k);
     int best = -1;
     float bestDist = 12.0f;
-    for (int i = 0; i < (int)preset.filters.size(); ++i) {
-        const auto& f = preset.filters[(size_t)i];
+    for (int i = 0; i < (int)filters.size(); ++i) {
+        const auto& f = filters[(size_t)i];
         if (f.type == bteq::FilterType::LowPass) continue;
         const float d = nodePosition(f, k).getDistanceFrom(pos);
         if (d < bestDist) { bestDist = d; best = i; }
@@ -513,18 +593,18 @@ void ResponseGraph::mouseDown(const juce::MouseEvent& e) {
 
 void ResponseGraph::mouseDrag(const juce::MouseEvent& e) {
     if (dragIndex < 0) return;
-    const auto preset = proc.effectiveParametric();
-    if (dragIndex >= (int)preset.filters.size()) return;
-    auto f = preset.filters[(size_t)dragIndex];
+    double k = 1.0;
+    const auto filters = nodeFilters(k);
+    if (dragIndex >= (int)filters.size()) return;
+    auto f = filters[(size_t)dragIndex];
     const auto a = plotArea();
     const double x = juce::jlimit(0.0, 1.0, (double)((e.position.x - a.getX()) / a.getWidth()));
     f.fc = roundFreq(20.0 * std::pow(1000.0, x));
-    const double k = proc.amount();
     if (k > 0.01) {
         const double db = (a.getCentreY() - e.position.y) / (a.getHeight() * 0.5) * rangeDb();
         f.gainDb = juce::jlimit(-20.0, 20.0, std::round(db / k * 10.0) / 10.0);
     }
-    proc.setFilter(dragIndex, f);
+    setNodeFilter(dragIndex, f);
     repaint();
 }
 
@@ -533,9 +613,10 @@ void ResponseGraph::mouseUp(const juce::MouseEvent&) { dragIndex = -1; repaint()
 void ResponseGraph::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& w) {
     const int i = nodeAt(e.position);
     if (i < 0 || w.deltaY == 0.0f) return;
-    auto f = proc.effectiveParametric().filters[(size_t)i];
+    double k = 1.0;
+    auto f = nodeFilters(k)[(size_t)i];
     f.q = juce::jlimit(0.1, 20.0, std::round(f.q * (w.deltaY > 0 ? 1.1 : 1.0 / 1.1) * 100.0) / 100.0);
-    proc.setFilter(i, f);
+    setNodeFilter(i, f);
     repaint();
 }
 
@@ -556,6 +637,37 @@ FiltersPanel::FiltersPanel(BteqProcessor& p, const Theme& t) : proc(p), theme(t)
             l.onTextChange = [this, i, fi, &l] { commit(i, (Field)fi, l.getText()); };
             addChildComponent(l);
         }
+    myEqOnButton.getProperties().set("kind", "pill");
+    myEqOnButton.setClickingTogglesState(true);
+    myEqOnButton.setTooltip("Switch My EQ on or off");
+    myEqOnButton.onClick = [this] {
+        proc.setMyEqOn(myEqOnButton.getToggleState());
+        refresh();
+        getParentComponent()->repaint();
+    };
+    addChildComponent(myEqOnButton);
+}
+
+std::vector<bteq::FilterSpec> FiltersPanel::shownFilters() const {
+    if (proc.editingMyEq) return proc.myEq().bands;
+    if (proc.selectedProfile() == nullptr || proc.graphicModeActive()) return {};
+    return proc.effectiveParametric().filters;
+}
+
+void FiltersPanel::mouseDown(const juce::MouseEvent& e) {
+    if (!proc.editingMyEq) return;
+    auto bands = proc.myEq().bands;
+    for (int i = 0; i < (int)bands.size() && i < maxCards; ++i) {
+        if (!cardBounds(i).withHeight(22).contains(e.getPosition())) continue;
+        auto f = bands[(size_t)i];
+        using T = bteq::FilterType;
+        f.type = f.type == T::Peaking ? T::LowShelf : f.type == T::LowShelf ? T::HighShelf : T::Peaking;
+        if (f.type != T::Peaking && f.q > 2.0) f.q = 0.7;
+        proc.setMyEqBand(i, f);
+        refresh();
+        getParentComponent()->repaint();
+        return;
+    }
 }
 
 juce::Rectangle<int> FiltersPanel::cardBounds(int i) const {
@@ -565,6 +677,7 @@ juce::Rectangle<int> FiltersPanel::cardBounds(int i) const {
 }
 
 void FiltersPanel::resized() {
+    myEqOnButton.setBounds(getWidth() - 64 - 8 - 62, getHeight() - 22, 62, 22);
     for (int i = 0; i < maxCards; ++i) {
         auto r = cardBounds(i).reduced(9, 6);
         r.removeFromTop(16);
@@ -575,16 +688,17 @@ void FiltersPanel::resized() {
 }
 
 void FiltersPanel::refresh() {
-    const auto* p = proc.selectedProfile();
-    const bool show = p != nullptr && !proc.graphicModeActive();
-    const auto preset = proc.effectiveParametric();
+    const auto filters = shownFilters();
+    myEqOnButton.setVisible(proc.editingMyEq);
+    myEqOnButton.setToggleState(proc.myEq().on, juce::dontSendNotification);
+    myEqOnButton.setButtonText(proc.myEq().on ? "On" : "Off");
     for (int i = 0; i < maxCards; ++i) {
-        const bool has = show && i < (int)preset.filters.size();
+        const bool has = i < (int)filters.size();
         for (int fi = 0; fi < numFields; ++fi) {
             auto& l = values[(size_t)i][(size_t)fi];
             l.setVisible(has);
             if (!has || l.isBeingEdited()) continue;
-            const auto& f = preset.filters[(size_t)i];
+            const auto& f = filters[(size_t)i];
             const bool lowPass = f.type == bteq::FilterType::LowPass;
             const juce::String text = fi == Freq ? formatFreq(f.fc)
                                     : fi == Gain ? (lowPass ? juce::String("12 dB/oct") : formatDb(f.gainDb))
@@ -596,7 +710,7 @@ void FiltersPanel::refresh() {
 }
 
 void FiltersPanel::commit(int card, Field field, const juce::String& text) {
-    auto filters = proc.effectiveParametric().filters;
+    auto filters = shownFilters();
     if (card >= (int)filters.size()) return;
     auto f = filters[(size_t)card];
     const double v = parseTyped(text, field == Freq);
@@ -604,7 +718,8 @@ void FiltersPanel::commit(int card, Field field, const juce::String& text) {
         if (field == Freq) f.fc = juce::jlimit(10.0, 22000.0, v);
         if (field == Gain) f.gainDb = juce::jlimit(-30.0, 30.0, v);
         if (field == Q) f.q = juce::jlimit(0.05, 30.0, v);
-        proc.setFilter(card, f);
+        if (proc.editingMyEq) proc.setMyEqBand(card, f);
+        else proc.setFilter(card, f);
     }
     refresh();
     getParentComponent()->repaint();
@@ -612,14 +727,14 @@ void FiltersPanel::commit(int card, Field field, const juce::String& text) {
 
 void FiltersPanel::paint(juce::Graphics& g) {
     const auto* p = proc.selectedProfile();
-    if (p == nullptr) {
+    if (p == nullptr && !proc.editingMyEq) {
         g.setColour(Theme::soft);
         g.setFont(theme.bodyFont(14.0f));
         g.drawFittedText("Pick a headphone and a target. The filters will show here.", getLocalBounds().reduced(8),
                          juce::Justification::topLeft, 3);
         return;
     }
-    if (const auto& m = proc.currentMatch(); m.active) {
+    if (const auto& m = proc.currentMatch(); m.active && !proc.editingMyEq) {
         auto r = getLocalBounds().reduced(6, 4);
         g.setColour(Theme::text);
         g.setFont(theme.labelFont(19.0f));
@@ -637,7 +752,7 @@ void FiltersPanel::paint(juce::Graphics& g) {
                          r.removeFromTop(44), juce::Justification::topLeft, 2);
         return;
     }
-    if (proc.graphicModeActive()) {
+    if (proc.graphicModeActive() && !proc.editingMyEq) {
         auto r = getLocalBounds().reduced(6, 4);
         g.setColour(Theme::text);
         g.setFont(theme.labelFont(19.0f));
@@ -654,8 +769,7 @@ void FiltersPanel::paint(juce::Graphics& g) {
         return;
     }
 
-    const auto preset = proc.effectiveParametric();
-    const auto& fs = preset.filters;
+    const auto fs = shownFilters();
     for (int i = 0; i < (int)fs.size() && i < maxCards; ++i) {
         const auto& f = fs[(size_t)i];
         const auto card = cardBounds(i).toFloat();
@@ -672,15 +786,162 @@ void FiltersPanel::paint(juce::Graphics& g) {
         g.setFont(theme.labelFont(13.0f));
         g.drawText(juce::String(i + 1), top.removeFromLeft(16), juce::Justification::centredLeft);
         g.setFont(theme.condFont(13.0f));
-        g.drawText(type, top, juce::Justification::centredRight);
+        if (proc.editingMyEq) {
+            // The type can be changed: draw it as a small switch.
+            const auto chip = top.removeFromRight(juce::GlyphArrangement::getStringWidth(g.getCurrentFont(), type) + 14);
+            g.setColour(juce::Colour(0x1fffffff));
+            g.fillRoundedRectangle(chip, 4.0f);
+            g.setColour(Theme::soft);
+            g.drawText(type, chip, juce::Justification::centred);
+        } else {
+            g.drawText(type, top, juce::Justification::centredRight);
+        }
     }
     auto footer = getLocalBounds().removeFromBottom(20);
     g.setColour(Theme::muted);
     g.setFont(theme.bodyFont(12.0f));
-    juce::String hint = "Click a value to type, drag a point on the graph, scroll on a point for Q";
+    juce::String hint;
+    if (proc.editingMyEq) {
+        hint = "Click a type to change it, drag points on the graph";
+        if (proc.myEqActive()) hint = "Click a type to change it. Headroom " + formatDb(proc.myEqHeadroomDb());
+        g.drawText(hint, footer.withTrimmedRight(64 + 8 + 62 + 6), juce::Justification::centredLeft, true);
+        return;
+    }
+    hint = "Click a value to type, drag a point on the graph, scroll on a point for Q";
     if (fs.size() > (size_t)maxCards) hint = "+" + juce::String((int)fs.size() - maxCards) + " more filters. " + hint;
     g.drawText(hint, footer.withTrimmedRight(70), juce::Justification::centredLeft, true);
 }
+
+// Death-logo style title ---------------------------------------------------------
+namespace {
+// Chamfer distance (in pixels) from every pixel where `inside` is true to the
+// nearest pixel where it is false.
+std::vector<float> distanceTo(const std::vector<bool>& inside, int w, int h) {
+    const float big = 1e6f, d1 = 1.0f, d2 = 1.4142f;
+    std::vector<float> d((size_t)(w * h));
+    for (size_t i = 0; i < d.size(); ++i) d[i] = inside[i] ? big : 0.0f;
+    auto at = [&](int x, int y) -> float& { return d[(size_t)(y * w + x)]; };
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            float& v = at(x, y);
+            if (v == 0.0f) continue;
+            if (x > 0) v = std::min(v, at(x - 1, y) + d1);
+            if (y > 0) {
+                v = std::min(v, at(x, y - 1) + d1);
+                if (x > 0) v = std::min(v, at(x - 1, y - 1) + d2);
+                if (x + 1 < w) v = std::min(v, at(x + 1, y - 1) + d2);
+            }
+        }
+    for (int y = h - 1; y >= 0; --y)
+        for (int x = w - 1; x >= 0; --x) {
+            float& v = at(x, y);
+            if (v == 0.0f) continue;
+            if (x + 1 < w) v = std::min(v, at(x + 1, y) + d1);
+            if (y + 1 < h) {
+                v = std::min(v, at(x, y + 1) + d1);
+                if (x + 1 < w) v = std::min(v, at(x + 1, y + 1) + d2);
+                if (x > 0) v = std::min(v, at(x - 1, y + 1) + d2);
+            }
+        }
+    return d;
+}
+
+// "Born To EQ The World" in the title font, styled like the old Death logo:
+// black outline, a band of the accent colour just inside each letter's edge,
+// black cores in the thick strokes, and blood running off the letters.
+// Drawn at `scale` times the 1x size; `area` is where it goes at 1x.
+juce::Image makeDeathTitle(const Theme& theme, juce::Colour accent, float scale, juce::Rectangle<float>& area) {
+    const juce::String text = "Born To EQ The World";
+    const float h1 = 42.0f, S = scale;
+    const auto font = theme.titleFont(h1 * S);
+    const float pad = 6.0f * S, drip = 19.0f * S;
+    const float width = juce::GlyphArrangement::getStringWidth(font, text);
+    const float baseline = pad + font.getAscent();
+    const int w = (int)std::ceil(width + pad * 2), h = (int)std::ceil(baseline + font.getDescent() + drip);
+
+    juce::GlyphArrangement glyphs;
+    glyphs.addLineOfText(font, text, pad, baseline);
+    juce::Path letters;
+    glyphs.createPath(letters);
+
+    // Blood: runs from the bottom of some letters, with a drop at the end, and a few loose drops.
+    struct Run { int glyph; float length, width; };
+    const Run runs[] = { { 0, 14.0f, 2.9f }, { 3, 8.0f, 2.2f }, { 8, 16.0f, 3.1f }, { 9, 7.0f, 2.0f },
+                         { 15, 13.0f, 2.8f }, { 19, 10.0f, 2.5f } };
+    juce::Image probe(juce::Image::SingleChannel, w, h, true);
+    {
+        juce::Graphics pg(probe);
+        pg.setColour(juce::Colours::white);
+        pg.fillPath(letters);
+    }
+    juce::Path blood;
+    for (const auto& r : runs) {
+        if (r.glyph >= glyphs.getNumGlyphs()) continue;
+        const auto gb = glyphs.getBoundingBox(r.glyph, 1, true);
+        // The lowest point of the letter near the middle of the glyph.
+        int bestX = (int)gb.getCentreX(), bestY = (int)baseline;
+        for (int x = (int)(gb.getX() + gb.getWidth() * 0.2f); x < (int)(gb.getRight() - gb.getWidth() * 0.2f); ++x)
+            for (int y = h - 1; y > 0; --y)
+                if (probe.getPixelAt(juce::jlimit(0, w - 1, x), y).getAlpha() > 160) {
+                    if (y > bestY) { bestY = y; bestX = x; }
+                    break;
+                }
+        const float x = (float)bestX, top = (float)bestY - 2.0f * S, len = r.length * S, rw = r.width * S;
+        juce::Path p;
+        // Wide where it leaves the letter, narrowing, then a round drop at the end.
+        p.startNewSubPath(x - rw * 1.3f, top);
+        p.quadraticTo(x - rw * 0.35f, top + len * 0.45f, x - rw * 0.45f, top + len * 0.8f);
+        p.quadraticTo(x - rw * 1.1f, top + len * 1.05f, x, top + len * 1.2f);
+        p.quadraticTo(x + rw * 1.1f, top + len * 1.05f, x + rw * 0.45f, top + len * 0.8f);
+        p.quadraticTo(x + rw * 0.35f, top + len * 0.45f, x + rw * 1.3f, top);
+        p.closeSubPath();
+        blood.addPath(p);
+    }
+    for (const auto& d : { juce::Point<float>(0.33f, 0.0f), juce::Point<float>(0.72f, 1.0f), juce::Point<float>(0.08f, 0.5f) }) {
+        const float x = pad + width * d.x, y = baseline + (10.0f + 4.0f * d.y) * S, r = 1.4f * S;
+        blood.addEllipse(x - r, y - r * 1.2f, r * 2.0f, r * 2.4f);
+    }
+    letters.addPath(blood);
+
+    // Distance from each letter's edge, inside and outside.
+    juce::Image mask(juce::Image::SingleChannel, w, h, true);
+    {
+        juce::Graphics mg(mask);
+        mg.setColour(juce::Colours::white);
+        mg.fillPath(letters);
+    }
+    std::vector<bool> in((size_t)(w * h));
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) in[(size_t)(y * w + x)] = mask.getPixelAt(x, y).getAlpha() >= 128;
+    const auto din = distanceTo(in, w, h);
+    std::vector<bool> out(in.size());
+    for (size_t i = 0; i < in.size(); ++i) out[i] = !in[i];
+    const auto dout = distanceTo(out, w, h);
+
+    // Signed distance (positive inside), then the layers by threshold.
+    const float outline = 2.2f * S, edge = 0.5f * S, core = 1.35f * S;
+    const auto top = accent.brighter(0.35f), bottom = accent.darker(0.55f);
+    const auto black = juce::Colour(0xff050506);
+    juce::Image img(juce::Image::ARGB, w, h, true);
+    juce::Image::BitmapData bd(img, juce::Image::BitmapData::writeOnly);
+    for (int y = 0; y < h; ++y) {
+        const float t = juce::jlimit(0.0f, 1.0f, ((float)y - pad) / (baseline - pad));
+        const auto band = top.interpolatedWith(bottom, t);
+        for (int x = 0; x < w; ++x) {
+            const size_t i = (size_t)(y * w + x);
+            const float sd = in[i] ? din[i] - 0.5f : -(dout[i] - 0.5f);
+            auto cover = [&](float threshold) { return juce::jlimit(0.0f, 1.0f, sd - threshold + 0.5f); };
+            const float a = cover(-outline), b = cover(edge), c = cover(core);
+            if (a <= 0.0f) continue;
+            const auto col = black.interpolatedWith(band, b).interpolatedWith(black, c);
+            bd.setPixelColour(x, y, col.withAlpha(a * 0.96f));
+        }
+    }
+    // Same place as plain text drawn centred in (26, 12, 460, 48): baseline at 15 + ascent.
+    area = { 26.0f - pad / S, 15.0f - pad / S, (float)w / S, (float)h / S };
+    return img;
+}
+} // namespace
 
 // ===========================================================================
 // Editor
@@ -721,6 +982,11 @@ BteqEditor::BteqEditor(BteqProcessor& p)
 
     content.addAndMakeVisible(graph);
     content.addAndMakeVisible(filters);
+    graph.onMyEqToggled = [this] {
+        refreshEditing();
+        filters.repaint();
+        content.repaint();
+    };
 
     correction.setSliderStyle(juce::Slider::LinearHorizontal);
     correction.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
@@ -756,7 +1022,12 @@ BteqEditor::BteqEditor(BteqProcessor& p)
 
     resetButton.getProperties().set("kind", "small");
     resetButton.setTooltip("Go back to the published settings for this target");
-    resetButton.onClick = [this] { proc.resetEdits(); refreshEditing(); content.repaint(); };
+    resetButton.onClick = [this] {
+        if (proc.editingMyEq) proc.resetMyEq();
+        else proc.resetEdits();
+        refreshEditing();
+        content.repaint();
+    };
     content.addChildComponent(resetButton);
 
     savedButton.getProperties().set("kind", "dropdown");
@@ -797,6 +1068,7 @@ BteqEditor::~BteqEditor() { setLookAndFeel(nullptr); }
 void BteqEditor::setAccent(int index) {
     proc.accentIndex = juce::jlimit(0, Theme::numAccents - 1, index);
     lnf.accentColour = graph.accent = filters.accent = Theme::accent(proc.accentIndex);
+    titleImage = makeDeathTitle(*theme, Theme::accent(proc.accentIndex), 3.0f, titleArea);
     swatches[(size_t)proc.accentIndex].setToggleState(true, juce::dontSendNotification);
     content.repaint();
 }
@@ -876,10 +1148,9 @@ void BteqEditor::paintContent(juce::Graphics& g) {
     // Header.
     g.setColour(juce::Colour(0x14ffffff));
     g.drawHorizontalLine(72, 0.0f, bounds.getWidth());
-    g.setColour(juce::Colour(0xffECE8E0));
+    g.setOpacity(1.0f);
+    if (titleImage.isValid()) g.drawImage(titleImage, titleArea, juce::RectanglePlacement::stretchToFit);
     const auto titleFont = theme->titleFont(42.0f);
-    g.setFont(titleFont);
-    g.drawText("Born To EQ The World", 26, 12, 460, 48, juce::Justification::centredLeft);
     const int titleW = (int)juce::GlyphArrangement::getStringWidth(titleFont, "Born To EQ The World");
     g.setColour(Theme::muted);
     g.setFont(theme->labelFont(15.0f));
@@ -913,7 +1184,9 @@ void BteqEditor::paintContent(juce::Graphics& g) {
     g.setColour(Theme::soft);
     const auto* p = proc.selectedProfile();
     juce::String note;
-    if (p != nullptr) {
+    if (proc.editingMyEq) {
+        note = proc.myEq().on ? "Editing My EQ, on top of the correction" : "Editing My EQ (switched off)";
+    } else if (p != nullptr) {
         if (proc.currentMatch().active) note = "Sounding like " + proc.matchedHeadphone();
         else if (proc.matchedHeadphone().isNotEmpty()) note = "No measurement to match with for this source";
         else if (proc.graphicModeActive()) note = "Wavelet-style 127-point curve";
@@ -922,6 +1195,7 @@ void BteqEditor::paintContent(juce::Graphics& g) {
         else note = juce::String((int)p->parametric.filters.size()) + " filters from AutoEQ";
         if (!proc.graphicAvailable() && p->hasParametric) note << " (no graphic version)";
         if (proc.selectionEdited()) note << ", edited by you";
+        if (proc.myEqActive()) note << ", plus My EQ";
     }
     g.drawText(note, kTabsPanel.getRight() + 14, kTabsPanel.getY(), kGraphPanel.getRight() - kTabsPanel.getRight() - 14,
                kTabsPanel.getHeight(), juce::Justification::centredRight);
@@ -1122,7 +1396,9 @@ void BteqEditor::refreshEditing() {
         const auto text = formatDb(proc.preampSettingDb());
         if (preampValue.getText() != text) preampValue.setText(text, juce::dontSendNotification);
     }
-    resetButton.setVisible(proc.selectionEdited());
+    resetButton.setVisible(proc.editingMyEq ? proc.myEqEdited() : proc.selectionEdited());
+    resetButton.setTooltip(proc.editingMyEq ? "Set every My EQ band back to 0 dB"
+                                            : "Go back to the published settings for this target");
     preampKnob.setVisible(p != nullptr);
     if (!preampKnob.isMouseButtonDown() && std::abs(preampKnob.getValue() - proc.preampSettingDb()) > 0.04)
         preampKnob.setValue(proc.preampSettingDb(), juce::dontSendNotification);

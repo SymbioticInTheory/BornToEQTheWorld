@@ -96,12 +96,28 @@ public:
     const Match& currentMatch() const { return match; }
     const bteq::CurveLibrary* curveLibrary(); // loaded on first use
 
+    // Your own EQ on top of the correction: always parametric, not scaled by
+    // the correction amount, saved with the session and with saved profiles.
+    struct MyEq {
+        bool on = true;
+        std::vector<bteq::FilterSpec> bands;
+    };
+    static std::vector<bteq::FilterSpec> defaultMyEqBands();
+    MyEq myEq() const;
+    void setMyEqBand(int index, const bteq::FilterSpec& spec);
+    void setMyEqOn(bool on);
+    void resetMyEq();
+    bool myEqEdited() const;  // any band moved from 0 dB
+    bool myEqActive() const;  // on and doing something
+    double myEqHeadroomDb() const { return myEqPreampDb.load(); } // level drop so its boosts can't clip
+
     // Snapshot of the current choice (headphone, profile, mode, correction and
     // your edits), used by the saved profiles menu.
     juce::ValueTree makeSnapshot() const;
     void loadSnapshot(const juce::ValueTree& snapshot);
 
     int accentIndex = 0; // UI colour choice, saved with the session
+    bool editingMyEq = false;  // UI: graph and cards show My EQ
     bool advancedView = false; // UI: target and result curves, saved with the session
     int hiddenCurves = 0;      // UI: bit mask of curves switched off in the advanced legend
     float uiScale = 0.0f;      // UI: window scale, 0 = use the last scale picked in any instance
@@ -113,6 +129,13 @@ private:
     void rebuild(bool force);
     void buildParametric(const bteq::HeadphoneProfile* p, double k, double sr);
     void buildGraphic(const bteq::HeadphoneProfile* p, double k, double sr);
+    void buildMyEq(double sr);
+    void readMyEq(const juce::ValueTree& t);
+    MyEq myEqSettings;
+    int myEqVersion = 0, builtMyEqVersion = -1;
+    double builtMyEqRate = 0;
+    std::atomic<double> myEqPreampDb { 0.0 };
+    std::atomic<bool> myEqRunning { false };
 
     juce::SharedResourcePointer<LibraryHolder> holder;
     juce::CriticalSection buildLock; // selection + engine building
@@ -134,34 +157,48 @@ private:
     std::atomic<float>* modeParam = nullptr;
     std::atomic<float>* trimParam = nullptr;
 
-    // Parametric engine: built on the message thread, swapped in on the audio
-    // thread without blocking.
+    // Engines are built on the message thread and swapped in on the audio
+    // thread without blocking. A swap crossfades from the old engine over
+    // 20 ms; the old one is then handed back and freed on the message thread.
     juce::SpinLock swapLock;
-    std::unique_ptr<bteq::ParametricEq> activeEq, pendingEq;
-    std::atomic<bool> pendingReady { false };
-
-    // Graphic engine: a convolution that is completely built on the message
-    // thread (IR loaded and prepared there), then swapped in on the audio
-    // thread the same way as the parametric engine, crossfaded over one block.
-    // Old engines are handed back and freed on the message thread.
+    struct IirEngine {
+        bteq::ParametricEq eq;
+        void reset() { eq.reset(); }
+        void process(float* const* ch, int chans, int n) {
+            for (int c = 0; c < juce::jmin(chans, eq.numChannels()); ++c) eq.processChannel(c, ch[c], n);
+        }
+    };
     struct GraphicEngine {
         juce::dsp::Convolution conv;
         int blockSize = 1; // largest block it was prepared for
+        void reset() { conv.reset(); }
         // Runs the filter, in pieces if the host sends a block larger than it said it would.
-        void process(juce::dsp::AudioBlock<float> block) {
+        void process(float* const* ch, int chans, int n) {
+            juce::dsp::AudioBlock<float> block(ch, (size_t)chans, (size_t)n);
             for (size_t pos = 0; pos < block.getNumSamples(); pos += (size_t)blockSize) {
                 auto part = block.getSubBlock(pos, juce::jmin((size_t)blockSize, block.getNumSamples() - pos));
                 conv.process(juce::dsp::ProcessContextReplacing<float>(part));
             }
         }
     };
-    std::unique_ptr<GraphicEngine> activeGraphic, pendingGraphic, fadingGraphic;
-    std::atomic<bool> pendingGraphicReady { false };
-    std::array<std::unique_ptr<GraphicEngine>, 8> retiredGraphic; // guarded by swapLock
+    template <class E> struct EngineSlot {
+        std::unique_ptr<E> active, pending, fading;
+        std::atomic<bool> pendingReady { false };
+        std::array<std::unique_ptr<E>, 8> retired; // guarded by swapLock
+        int fadePos = 0;
+        bool usedLastBlock = false;
+    };
+    EngineSlot<IirEngine> eqSlot, extraSlot;
+    EngineSlot<GraphicEngine> graphicSlot;
+    template <class E> void publish(EngineSlot<E>& slot, std::unique_ptr<E> engine);
+    template <class E> void takePending(EngineSlot<E>& slot);
+    template <class E> void runSlot(EngineSlot<E>& slot, juce::AudioBuffer<float>& buffer, int chans, int n);
+    template <class E> void retireFading(EngineSlot<E>& slot, bool usedThisBlock);
+    template <class E> void freeRetired(EngineSlot<E>& slot);
+    void freeAllRetired();
     juce::AudioBuffer<float> fadeBuffer;
-    void freeRetiredGraphic();
+    int fadeLength = 960;
     std::atomic<bool> graphicReady { false };
-    bool lastBlockGraphic = false;
 
     juce::SmoothedValue<float> trimGain;
     double sampleRate = 48000;
