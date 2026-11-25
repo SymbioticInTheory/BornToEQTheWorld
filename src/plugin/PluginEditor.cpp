@@ -86,11 +86,14 @@ void BteqLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, c
     if (kind == "swatch") {
         const auto c = juce::Colour((juce::uint32)(juce::int64)b.getProperties()["swatch"]);
         if (b.getToggleState()) {
-            g.setColour(Theme::textBright);
-            g.drawEllipse(r.reduced(1.0f), 2.0f);
+            g.setColour(Theme::soft);
+            g.drawEllipse(r.reduced(1.0f), 1.2f);
+        } else if (over) {
+            g.setColour(Theme::muted.withAlpha(0.5f));
+            g.drawEllipse(r.reduced(1.0f), 1.0f);
         }
         g.setColour(c);
-        g.fillEllipse(r.reduced(6.0f));
+        g.fillEllipse(r.reduced(4.0f));
         return;
     }
     if (kind == "tab") {
@@ -339,7 +342,7 @@ void ResponseGraph::paintMyEq(juce::Graphics& g, juce::Colour colour, float widt
     std::vector<bteq::BiquadCoeffs> coeffs;
     if (mine.on)
         for (const auto& f : mine.bands)
-            if (std::abs(f.gainDb) > 0.01) coeffs.push_back(bteq::BiquadCoeffs::make(f.type, f.fc, f.gainDb, f.q, 48000.0));
+            if (f.enabled && std::abs(f.gainDb) > 0.01) coeffs.push_back(bteq::BiquadCoeffs::make(f.type, f.fc, f.gainDb, f.q, 48000.0));
     juce::Path curve;
     const int points = 300;
     for (int i = 0; i <= points; ++i) {
@@ -369,11 +372,12 @@ void ResponseGraph::paintNodes(juce::Graphics& g, const std::vector<bteq::Filter
         if (f.type == bteq::FilterType::LowPass) { ++num; continue; }
         const auto pos = nodePosition(f, k);
         const float x = pos.x, y = pos.y;
-        g.setColour(num - 1 == dragIndex ? colour.withAlpha(0.45f) : juce::Colour(0xff0B0C0D));
+        const auto c = f.enabled ? colour : colour.withMultipliedAlpha(0.35f); // switched off: faded
+        g.setColour(num - 1 == dragIndex ? c.withAlpha(0.45f) : juce::Colour(0xff0B0C0D));
         g.fillEllipse(x - 9, y - 9, 18, 18);
-        g.setColour(colour);
+        g.setColour(c);
         g.drawEllipse(x - 9, y - 9, 18, 18, 2.0f);
-        g.setColour(Theme::textBright);
+        g.setColour(f.enabled ? Theme::textBright : Theme::muted);
         g.drawText(juce::String(num++), juce::Rectangle<float>(x - 9, y - 9, 18, 18), juce::Justification::centred);
     }
 }
@@ -453,7 +457,7 @@ void ResponseGraph::paintAdvanced(juce::Graphics& g, const bteq::HeadphoneProfil
     std::vector<double> mine(freqs.size(), 0.0);
     if (const auto my = proc.myEq(); my.on)
         for (const auto& f : my.bands) {
-            if (std::abs(f.gainDb) <= 0.01) continue;
+            if (!f.enabled || std::abs(f.gainDb) <= 0.01) continue;
             const auto co = bteq::BiquadCoeffs::make(f.type, f.fc, f.gainDb, f.q, 48000.0);
             for (size_t i = 0; i < mine.size(); ++i) mine[i] += co.magnitudeDb(freqs[i], 48000.0);
         }
@@ -492,7 +496,7 @@ void ResponseGraph::paintAdvanced(juce::Graphics& g, const bteq::HeadphoneProfil
         }
     };
 
-    const juce::Colour targetColour(0xffD9D5CD), measuredColour(0xff7E8893);
+    const juce::Colour targetColour(0xffE3B23C), measuredColour(0xff6F8296);
     const bool hasMeasured = !measured.empty(), hasTarget = c.target != nullptr;
     auto visible = [this](Curve cv) { return (proc.hiddenCurves & (1 << cv)) == 0; };
 
@@ -655,11 +659,21 @@ std::vector<bteq::FilterSpec> FiltersPanel::shownFilters() const {
 }
 
 void FiltersPanel::mouseDown(const juce::MouseEvent& e) {
-    if (!proc.editingMyEq) return;
-    auto bands = proc.myEq().bands;
-    for (int i = 0; i < (int)bands.size() && i < maxCards; ++i) {
-        if (!cardBounds(i).withHeight(22).contains(e.getPosition())) continue;
-        auto f = bands[(size_t)i];
+    const auto shown = shownFilters();
+    for (int i = 0; i < (int)shown.size() && i < maxCards; ++i) {
+        const auto top = cardBounds(i).withHeight(24);
+        if (!top.contains(e.getPosition())) continue;
+        auto f = shown[(size_t)i];
+        if (e.x < top.getX() + 30) {
+            // The number is the filter's on/off switch.
+            f.enabled = !f.enabled;
+            if (proc.editingMyEq) proc.setMyEqBand(i, f);
+            else proc.setFilter(i, f);
+            refresh();
+            getParentComponent()->repaint();
+            return;
+        }
+        if (!proc.editingMyEq) return;
         using T = bteq::FilterType;
         f.type = f.type == T::Peaking ? T::LowShelf : f.type == T::LowShelf ? T::HighShelf : T::Peaking;
         if (f.type != T::Peaking && f.q > 2.0) f.q = 0.7;
@@ -699,6 +713,8 @@ void FiltersPanel::refresh() {
             l.setVisible(has);
             if (!has || l.isBeingEdited()) continue;
             const auto& f = filters[(size_t)i];
+            const auto base = fi == Freq ? Theme::text : juce::Colour(0xffB2AFA9);
+            l.setColour(juce::Label::textColourId, f.enabled ? base : base.withAlpha(0.35f));
             const bool lowPass = f.type == bteq::FilterType::LowPass;
             const juce::String text = fi == Freq ? formatFreq(f.fc)
                                     : fi == Gain ? (lowPass ? juce::String("12 dB/oct") : formatDb(f.gainDb))
@@ -782,10 +798,21 @@ void FiltersPanel::paint(juce::Graphics& g) {
                          : f.type == bteq::FilterType::LowShelf ? "LOW SHELF"
                          : f.type == bteq::FilterType::HighShelf ? "HIGH SHELF" : "LOW PASS";
         auto top = r.removeFromTop(16);
-        g.setColour(accent.interpolatedWith(Theme::text, 0.25f));
-        g.setFont(theme.labelFont(13.0f));
-        g.drawText(juce::String(i + 1), top.removeFromLeft(16), juce::Justification::centredLeft);
+        // The number doubles as the on/off switch: filled when on, hollow when off.
+        const auto badge = top.removeFromLeft(18).withSizeKeepingCentre(18, 16);
+        if (f.enabled) {
+            g.setColour(accent);
+            g.fillRoundedRectangle(badge, 8.0f);
+            g.setColour(juce::Colour(0xff0B0C0D));
+        } else {
+            g.setColour(Theme::muted.withAlpha(0.6f));
+            g.drawRoundedRectangle(badge.reduced(0.5f), 8.0f, 1.0f);
+        }
+        g.setFont(theme.labelFont(12.0f));
+        g.drawText(juce::String(i + 1), badge, juce::Justification::centred);
         g.setFont(theme.condFont(13.0f));
+        g.setColour(accent.interpolatedWith(Theme::text, 0.25f));
+        if (!f.enabled) g.setOpacity(0.4f);
         if (proc.editingMyEq) {
             // The type can be changed: draw it as a small switch.
             const auto chip = top.removeFromRight(juce::GlyphArrangement::getStringWidth(g.getCurrentFont(), type) + 14);
@@ -796,18 +823,19 @@ void FiltersPanel::paint(juce::Graphics& g) {
         } else {
             g.drawText(type, top, juce::Justification::centredRight);
         }
+        g.setOpacity(1.0f);
     }
     auto footer = getLocalBounds().removeFromBottom(20);
     g.setColour(Theme::muted);
     g.setFont(theme.bodyFont(12.0f));
     juce::String hint;
     if (proc.editingMyEq) {
-        hint = "Click a type to change it, drag points on the graph";
-        if (proc.myEqActive()) hint = "Click a type to change it. Headroom " + formatDb(proc.myEqHeadroomDb());
+        hint = "Click a number to switch a band off, a type to change it";
+        if (proc.myEqActive()) hint = "Number: on/off. Type: change it. Headroom " + formatDb(proc.myEqHeadroomDb());
         g.drawText(hint, footer.withTrimmedRight(64 + 8 + 62 + 6), juce::Justification::centredLeft, true);
         return;
     }
-    hint = "Click a value to type, drag a point on the graph, scroll on a point for Q";
+    hint = "Click a number to switch a filter off, a value to type it; drag or scroll points on the graph";
     if (fs.size() > (size_t)maxCards) hint = "+" + juce::String((int)fs.size() - maxCards) + " more filters. " + hint;
     g.drawText(hint, footer.withTrimmedRight(70), juce::Justification::centredLeft, true);
 }
@@ -1169,7 +1197,9 @@ void BteqEditor::paintContent(juce::Graphics& g) {
     g.drawText("HEADPHONE", kHeadphonePanel.getX() + 14, kHeadphonePanel.getY() + 12, 200, 18, juce::Justification::centredLeft);
     g.drawText("TARGET", kTargetPanel.getX() + 14, kTargetPanel.getY() + 12, 200, 18, juce::Justification::centredLeft);
     g.drawText("CORRECTION", kCorrectionPanel.getX() + 14, kCorrectionPanel.getY() + 16, 120, 18, juce::Justification::centredLeft);
-    g.drawText("COLOUR", kCorrectionPanel.getX() + 14, kCorrectionPanel.getBottom() - 46, 100, 32, juce::Justification::centredLeft);
+    g.setFont(theme->labelFont(12.0f));
+    g.setColour(Theme::muted.withAlpha(0.7f));
+    g.drawText("COLOUR", kCorrectionPanel.getX() + 14, kCorrectionPanel.getBottom() - 32, 100, 20, juce::Justification::centredLeft);
 
     // Search icon.
     {
@@ -1220,7 +1250,7 @@ void BteqEditor::paintContent(juce::Graphics& g) {
     g.drawText(formatDb(pre), kCorrectionPanel.getRight() - 114, kCorrectionPanel.getY() + 104, 100, 20,
                juce::Justification::centredRight);
     g.setColour(juce::Colour(0x14ffffff));
-    g.drawHorizontalLine(kCorrectionPanel.getBottom() - 54, (float)kCorrectionPanel.getX() + 14, (float)kCorrectionPanel.getRight() - 14);
+    g.drawHorizontalLine(kCorrectionPanel.getBottom() - 40, (float)kCorrectionPanel.getX() + 14, (float)kCorrectionPanel.getRight() - 14);
 
     if (!proc.libraryLoaded()) {
         g.setColour(juce::Colour(0xffFFB5A6));
@@ -1248,8 +1278,8 @@ void BteqEditor::layoutContent() {
     resetButton.setBounds(kFiltersPanel.getRight() - 12 - 64, kFiltersPanel.getBottom() - 12 - 20, 64, 22);
     savedButton.setBounds(462, 18, 210, 36);
     for (int i = 0; i < Theme::numAccents; ++i)
-        swatches[(size_t)i].setBounds(kCorrectionPanel.getRight() - 14 - (Theme::numAccents - i) * 36 + 2,
-                                      kCorrectionPanel.getBottom() - 46, 34, 34);
+        swatches[(size_t)i].setBounds(kCorrectionPanel.getRight() - 12 - (Theme::numAccents - i) * 22,
+                                      kCorrectionPanel.getBottom() - 32, 20, 20);
 }
 
 // Sound like another headphone ---------------------------------------------------

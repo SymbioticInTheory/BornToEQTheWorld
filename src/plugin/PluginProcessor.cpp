@@ -333,7 +333,9 @@ std::vector<bteq::FilterSpec> BteqProcessor::defaultMyEqBands() {
     using T = bteq::FilterType;
     const std::pair<T, double> bands[] = { { T::LowShelf, 105 }, { T::Peaking, 200 },  { T::Peaking, 500 },
                                            { T::Peaking, 1000 }, { T::Peaking, 2000 }, { T::Peaking, 4000 },
-                                           { T::Peaking, 8000 }, { T::HighShelf, 10000 } };
+                                           { T::Peaking, 8000 }, { T::HighShelf, 10000 },
+                                           // Added later; kept at the end so older My EQ settings keep their numbering.
+                                           { T::Peaking, 60 }, { T::Peaking, 14000 } };
     std::vector<bteq::FilterSpec> out;
     for (const auto& [type, fc] : bands) {
         bteq::FilterSpec f;
@@ -376,11 +378,17 @@ void BteqProcessor::resetMyEq() {
 bool BteqProcessor::myEqEdited() const {
     const juce::ScopedLock sl(buildLock);
     for (const auto& b : myEqSettings.bands)
-        if (std::abs(b.gainDb) > 0.01) return true;
+        if (std::abs(b.gainDb) > 0.01 || !b.enabled) return true;
     return false;
 }
 
-bool BteqProcessor::myEqActive() const { return myEqSettings.on && myEqEdited(); }
+bool BteqProcessor::myEqActive() const {
+    const juce::ScopedLock sl(buildLock);
+    if (!myEqSettings.on) return false;
+    for (const auto& b : myEqSettings.bands)
+        if (b.enabled && std::abs(b.gainDb) > 0.01) return true;
+    return false;
+}
 
 // ---------------------------------------------------------------------------
 // Engine building (message thread, or prepareToPlay)
@@ -465,7 +473,7 @@ void BteqProcessor::buildMyEq(double sr) {
     bteq::ParametricPreset preset;
     if (myEqSettings.on)
         for (const auto& b : myEqSettings.bands)
-            if (std::abs(b.gainDb) > 0.01) preset.filters.push_back(b);
+            if (b.enabled && std::abs(b.gainDb) > 0.01) preset.filters.push_back(b);
     auto engine = std::make_unique<IirEngine>();
     // Its own headroom: the level drops by its highest boost, so it can't clip
     // more than the correction alone.
@@ -725,7 +733,10 @@ void BteqProcessor::readMyEq(const juce::ValueTree& t) {
     if (!t.hasProperty("myEq")) return;
     const juce::ScopedLock sl(buildLock);
     auto bands = filtersFromString(t.getProperty("myEq").toString());
-    if (bands.size() != defaultMyEqBands().size()) bands = defaultMyEqBands();
+    const auto defaults = defaultMyEqBands();
+    if (bands.empty() || bands.size() > defaults.size()) bands = defaults;
+    // Older settings had fewer bands: keep them exactly and add the new ones, flat, after them.
+    for (size_t i = bands.size(); i < defaults.size(); ++i) bands.push_back(defaults[i]);
     myEqSettings.bands = bands;
     myEqSettings.on = (bool)t.getProperty("myEqOn", true);
     ++myEqVersion;
