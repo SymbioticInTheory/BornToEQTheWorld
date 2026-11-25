@@ -464,7 +464,6 @@ void BteqProcessor::updateApo() {
             return;
         }
         apoLastText.clear();
-        apoPendingText.clear();
     } else if (!apoWanted && apo.running()) {
         apo.stop();
     }
@@ -478,18 +477,14 @@ void BteqProcessor::updateApo() {
     if ((juce::int32)(apoDeviceCheckUntil - juce::Time::getMillisecondCounter()) > 0) setStandaloneAudioOpen(!apo.running());
     if (!apo.running()) return;
 
-    // Written once the settings have held still for a moment, so a knob drag
-    // doesn't make APO reload its config many times a second.
+    // A click (bypass, a filter switch, a new target) is written straight away.
+    // While a knob is dragged, writes are spaced 200 ms apart so APO doesn't
+    // reload its config many times a second; the final value always follows.
     const auto text = apoConfigText();
     const auto now = juce::Time::getMillisecondCounter();
     if (text == apoLastText) return;
-    if (text != apoPendingText) {
-        apoPendingText = text;
-        apoPendingSince = now;
-        if (apoLastText.isNotEmpty()) return;
-    } else if (now - apoPendingSince < 250) {
-        return;
-    }
+    if (apoLastText.isNotEmpty() && now - apoLastWrite < 200) return;
+    apoLastWrite = now;
     juce::String error;
     if (apo.write(text, error)) {
         apoLastText = text;
