@@ -94,7 +94,8 @@ if(BTEQ_BUILD_PLUGIN)
   target_sources(BornToEQTheWorld PRIVATE
     src/plugin/PluginProcessor.cpp
     src/plugin/PluginEditor.cpp
-    src/plugin/ApoBridge.cpp)
+    src/plugin/ApoBridge.cpp
+    src/plugin/StandaloneAudio.cpp)
   target_include_directories(BornToEQTheWorld PRIVATE src)
 
   target_compile_definitions(BornToEQTheWorld PUBLIC

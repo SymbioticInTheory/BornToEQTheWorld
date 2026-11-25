@@ -2,6 +2,8 @@
 #include "PluginEditor.h"
 #include "ApoConfig.h"
 
+void setStandaloneAudioOpen(bool open); // StandaloneAudio.cpp
+
 #include <BinaryData.h>
 
 LibraryHolder::LibraryHolder() {
@@ -466,7 +468,14 @@ void BteqProcessor::updateApo() {
     } else if (!apoWanted && apo.running()) {
         apo.stop();
     }
+    // While APO applies the EQ, the standalone needs no audio device. Holding
+    // one open (ASIO or a small buffer on the same interface) can make
+    // Windows' own audio stutter, so it is closed, and reopened when APO is off.
+    // Checked for a few seconds after a change, since the app may open its
+    // device just after restoring a session that had APO on.
+    if (apo.running() != apoRunning.load()) apoDeviceCheckUntil = juce::Time::getMillisecondCounter() + 3000;
     apoRunning = apo.running();
+    if ((juce::int32)(apoDeviceCheckUntil - juce::Time::getMillisecondCounter()) > 0) setStandaloneAudioOpen(!apo.running());
     if (!apo.running()) return;
 
     // Written once the settings have held still for a moment, so a knob drag
