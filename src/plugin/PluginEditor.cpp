@@ -244,16 +244,32 @@ ResponseGraph::ResponseGraph(BteqProcessor& p, const Theme& t) : proc(p), theme(
     myEqButton.setTooltip("Your own EQ on top of the correction. Turn on to edit it here and in the cards below.");
     myEqButton.onClick = [this] {
         proc.editingMyEq = myEqButton.getToggleState();
+        refreshMyEqButton();
         dragIndex = -1;
         repaint();
         if (onMyEqToggled) onMyEqToggled();
     };
     addAndMakeVisible(myEqButton);
+    scopeButton.getProperties().set("kind", "pill");
+    scopeButton.setTooltip("Every target: one My EQ that stays as you change target or load a saved profile.\n"
+                           "This target only: each target keeps its own My EQ, and saved profiles keep theirs.");
+    scopeButton.onClick = [this] {
+        proc.setMyEqPerTarget(!proc.myEqPerTarget());
+        refreshMyEqButton();
+        repaint();
+        if (onMyEqToggled) onMyEqToggled();
+    };
+    addChildComponent(scopeButton);
     refreshMyEqButton();
     setAdvanced(proc.advancedView);
 }
 
-void ResponseGraph::refreshMyEqButton() { myEqButton.setToggleState(proc.editingMyEq, juce::dontSendNotification); }
+void ResponseGraph::refreshMyEqButton() {
+    myEqButton.setToggleState(proc.editingMyEq, juce::dontSendNotification);
+    scopeButton.setVisible(proc.editingMyEq);
+    scopeButton.setButtonText(proc.myEqPerTarget() ? "This target only" : "Every target");
+    scopeButton.setToggleState(proc.myEqPerTarget(), juce::dontSendNotification);
+}
 
 void ResponseGraph::setAdvanced(bool on) {
     proc.advancedView = on;
@@ -265,6 +281,7 @@ void ResponseGraph::setAdvanced(bool on) {
 void ResponseGraph::resized() {
     advancedButton.setBounds(getWidth() - 96, 2, 96, 24);
     myEqButton.setBounds(getWidth() - 96 - 8 - 76, 2, 76, 24);
+    scopeButton.setBounds(myEqButton.getX() - 8 - 140, 2, 140, 24);
 }
 
 juce::Rectangle<float> ResponseGraph::plotArea() const {
@@ -1215,7 +1232,8 @@ void BteqEditor::paintContent(juce::Graphics& g) {
     const auto* p = proc.selectedProfile();
     juce::String note;
     if (proc.editingMyEq) {
-        note = proc.myEq().on ? "Editing My EQ, on top of the correction" : "Editing My EQ (switched off)";
+        note = proc.myEqPerTarget() ? "Editing My EQ for this target" : "Editing My EQ for every target";
+        if (!proc.myEq().on) note << " (switched off)";
     } else if (p != nullptr) {
         if (proc.currentMatch().active) note = "Sounding like " + proc.matchedHeadphone();
         else if (proc.matchedHeadphone().isNotEmpty()) note = "No measurement to match with for this source";

@@ -83,7 +83,7 @@ private:
     int dragIndex = -1;
     BteqProcessor& proc;
     const Theme& theme;
-    juce::TextButton advancedButton { "Advanced" }, myEqButton { "My EQ" };
+    juce::TextButton advancedButton { "Advanced" }, myEqButton { "My EQ" }, scopeButton;
     std::unique_ptr<juce::SharedResourcePointer<CurvesHolder>> curves; // loaded on first use
     enum Curve { Target, Measured, Corrected, Eq, numCurves };
     std::array<juce::Rectangle<float>, numCurves> legendHit;

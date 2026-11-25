@@ -107,6 +107,10 @@ public:
     void setMyEqBand(int index, const bteq::FilterSpec& spec);
     void setMyEqOn(bool on);
     void resetMyEq();
+    // Off: one My EQ for everything (it stays as you change target or load a
+    // saved profile). On: each target has its own, and saved profiles keep theirs.
+    bool myEqPerTarget() const { return myEqPerTargetFlag; }
+    void setMyEqPerTarget(bool perTarget);
     bool myEqEdited() const;  // any band moved from 0 dB
     bool myEqActive() const;  // on and doing something
     double myEqHeadroomDb() const { return myEqPreampDb.load(); } // level drop so its boosts can't clip
@@ -131,6 +135,11 @@ private:
     void buildGraphic(const bteq::HeadphoneProfile* p, double k, double sr);
     void buildMyEq(double sr);
     void readMyEq(const juce::ValueTree& t);
+    static MyEq parseMyEq(const juce::ValueTree& t);
+    void syncMyEq(); // per-target mode: swap in the My EQ of the selected target
+    bool myEqPerTargetFlag = false;
+    std::map<juce::String, MyEq> myEqByTarget; // per-target mode, other targets than the selected one
+    juce::String myEqKey;                      // the target myEqSettings belongs to in per-target mode
     MyEq myEqSettings;
     int myEqVersion = 0, builtMyEqVersion = -1;
     double builtMyEqRate = 0;

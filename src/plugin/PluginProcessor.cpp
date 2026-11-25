@@ -375,6 +375,31 @@ void BteqProcessor::resetMyEq() {
     rebuild(false);
 }
 
+void BteqProcessor::setMyEqPerTarget(bool perTarget) {
+    const juce::ScopedLock sl(buildLock);
+    if (perTarget == myEqPerTargetFlag) return;
+    myEqPerTargetFlag = perTarget;
+    // Either way the My EQ you hear now stays: switching on makes it this target's.
+    myEqKey = editKey();
+    rebuild(false);
+}
+
+void BteqProcessor::syncMyEq() {
+    if (!myEqPerTargetFlag) return;
+    const auto key = editKey();
+    if (key == myEqKey) return;
+    if (myEqKey.isNotEmpty()) myEqByTarget[myEqKey] = myEqSettings;
+    const auto it = myEqByTarget.find(key);
+    if (it != myEqByTarget.end()) {
+        myEqSettings = it->second;
+    } else {
+        myEqSettings = {};
+        myEqSettings.bands = defaultMyEqBands();
+    }
+    myEqKey = key;
+    ++myEqVersion;
+}
+
 bool BteqProcessor::myEqEdited() const {
     const juce::ScopedLock sl(buildLock);
     for (const auto& b : myEqSettings.bands)
@@ -400,6 +425,7 @@ void BteqProcessor::timerCallback() {
 
 void BteqProcessor::rebuild(bool force) {
     const juce::ScopedLock sl(buildLock);
+    syncMyEq();
     if (force || myEqVersion != builtMyEqVersion || !juce::exactlyEqual(sampleRate, builtMyEqRate)) {
         buildMyEq(sampleRate);
         builtMyEqVersion = myEqVersion;
@@ -636,6 +662,17 @@ void BteqProcessor::getStateInformation(juce::MemoryBlock& destData) {
         const juce::ScopedLock sl(buildLock);
         state.setProperty("myEq", filtersToString(myEqSettings.bands), nullptr);
         state.setProperty("myEqOn", myEqSettings.on, nullptr);
+        state.setProperty("myEqPerTarget", myEqPerTargetFlag, nullptr);
+        juce::ValueTree others("MYEQS");
+        for (const auto& [key, m] : myEqByTarget) {
+            if (key == myEqKey) continue;
+            juce::ValueTree t("MYEQ");
+            t.setProperty("key", key, nullptr);
+            t.setProperty("myEq", filtersToString(m.bands), nullptr);
+            t.setProperty("myEqOn", m.on, nullptr);
+            others.appendChild(t, nullptr);
+        }
+        state.appendChild(others, nullptr);
         juce::ValueTree list("EDITS");
         for (const auto& [key, e] : edits) {
             if (!e.filtersEdited && !e.preampEdited) continue;
@@ -655,6 +692,8 @@ void BteqProcessor::setStateInformation(const void* data, int sizeInBytes) {
     auto state = juce::ValueTree::fromXml(*xml);
     const auto list = state.getChildWithName("EDITS");
     state.removeChild(list, nullptr);
+    const auto otherMyEqs = state.getChildWithName("MYEQS");
+    state.removeChild(otherMyEqs, nullptr);
     params.replaceState(state);
     {
         const juce::ScopedLock sl(buildLock);
@@ -678,6 +717,11 @@ void BteqProcessor::setStateInformation(const void* data, int sizeInBytes) {
         const juce::ScopedLock sl(buildLock);
         matchName = state.getProperty("match").toString();
         computeMatch();
+        myEqPerTargetFlag = (bool)state.getProperty("myEqPerTarget", false);
+        myEqByTarget.clear();
+        for (const auto& t : otherMyEqs)
+            myEqByTarget[t.getProperty("key").toString()] = parseMyEq(t);
+        myEqKey = editKey(); // the My EQ just read belongs to the selected target
     }
     rebuild(true);
 }
@@ -723,22 +767,28 @@ void BteqProcessor::loadSnapshot(const juce::ValueTree& t) {
         if (e.filtersEdited || e.preampEdited) edits[key] = e;
         else edits.erase(key);
     }
-    readMyEq(t);
+    syncMyEq(); // per target: put away the old target's My EQ before taking this one's
+    if (myEqPerTargetFlag) readMyEq(t); // shared: My EQ carries over unchanged
     ++editVersion;
     rebuild(false);
 }
 
 // Reads My EQ from a session or saved profile; older ones without it leave it as it is.
+BteqProcessor::MyEq BteqProcessor::parseMyEq(const juce::ValueTree& t) {
+    MyEq m;
+    m.bands = filtersFromString(t.getProperty("myEq").toString());
+    const auto defaults = defaultMyEqBands();
+    if (m.bands.empty() || m.bands.size() > defaults.size()) m.bands = defaults;
+    // Older settings had fewer bands: keep them exactly and add the new ones, flat, after them.
+    for (size_t i = m.bands.size(); i < defaults.size(); ++i) m.bands.push_back(defaults[i]);
+    m.on = (bool)t.getProperty("myEqOn", true);
+    return m;
+}
+
 void BteqProcessor::readMyEq(const juce::ValueTree& t) {
     if (!t.hasProperty("myEq")) return;
     const juce::ScopedLock sl(buildLock);
-    auto bands = filtersFromString(t.getProperty("myEq").toString());
-    const auto defaults = defaultMyEqBands();
-    if (bands.empty() || bands.size() > defaults.size()) bands = defaults;
-    // Older settings had fewer bands: keep them exactly and add the new ones, flat, after them.
-    for (size_t i = bands.size(); i < defaults.size(); ++i) bands.push_back(defaults[i]);
-    myEqSettings.bands = bands;
-    myEqSettings.on = (bool)t.getProperty("myEqOn", true);
+    myEqSettings = parseMyEq(t);
     ++myEqVersion;
 }
 
