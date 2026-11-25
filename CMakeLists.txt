@@ -16,6 +16,8 @@ if(BTEQ_BUILD_TESTS)
   add_executable(render_impulse tests/render_impulse.cpp)
   add_executable(render_graphic tests/render_graphic.cpp)
   add_executable(test_library tests/test_library.cpp)
+  add_executable(test_apo_config tests/test_apo_config.cpp)
+  add_test(NAME apo_config COMMAND test_apo_config)
   add_test(NAME headphone_library
            COMMAND test_library ${CMAKE_SOURCE_DIR}/data/headphones.tsv ${CMAKE_SOURCE_DIR}/presets/sample)
   if(Python3_FOUND)
@@ -91,7 +93,8 @@ if(BTEQ_BUILD_PLUGIN)
 
   target_sources(BornToEQTheWorld PRIVATE
     src/plugin/PluginProcessor.cpp
-    src/plugin/PluginEditor.cpp)
+    src/plugin/PluginEditor.cpp
+    src/plugin/ApoBridge.cpp)
   target_include_directories(BornToEQTheWorld PRIVATE src)
 
   target_compile_definitions(BornToEQTheWorld PUBLIC

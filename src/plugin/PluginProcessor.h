@@ -6,6 +6,7 @@
 #include "dsp/CurveLibrary.h"
 #include "dsp/GraphicEq.h"
 #include "dsp/HeadphoneLibrary.h"
+#include "ApoBridge.h"
 
 #include <array>
 #include <atomic>
@@ -125,6 +126,15 @@ public:
     juce::ValueTree makeSnapshot() const;
     void loadSnapshot(const juce::ValueTree& snapshot);
 
+    // Standalone only: send the EQ to Equalizer APO so it applies to the whole
+    // system, like Peace. Saved with the session.
+    bool standaloneUi = false; // set from the wrapper type
+    bool apoOutput() const { return apoWanted; }
+    void setApoOutput(bool on);
+    juce::String apoError() const { return apoProblem; }
+    juce::String apoFolder() const { return apo.folder().getFullPathName(); }
+    juce::String apoConfigText() const; // what BEQ's file in APO's config folder says now
+
     int accentIndex = 0; // UI colour choice, saved with the session
     bool editingMyEq = false;  // UI: graph and cards show My EQ
     bool sidebarCollapsed = false, headphoneCollapsed = false, targetCollapsed = false; // UI, saved with the session
@@ -144,6 +154,12 @@ private:
     static MyEq parseMyEq(const juce::ValueTree& t);
     static void writeMyEq(juce::ValueTree& t, const MyEq& m);
     void syncMyEq(); // per-target mode: swap in the My EQ of the selected target
+    void updateApo();
+    ApoBridge apo;
+    bool apoWanted = false;
+    std::atomic<bool> apoRunning { false }; // the standalone's own audio passes through untouched
+    juce::String apoProblem, apoLastText, apoPendingText;
+    juce::uint32 apoPendingSince = 0;
     bool myEqPerTargetFlag = false;
     std::map<juce::String, MyEq> myEqByTarget; // per-target mode, other targets than the selected one
     juce::String myEqKey;                      // the target myEqSettings belongs to in per-target mode

@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "ApoConfig.h"
 
 #include <BinaryData.h>
 
@@ -84,6 +85,7 @@ BteqProcessor::BteqProcessor()
     modeParam = params.getRawParameterValue(kMode);
     trimParam = params.getRawParameterValue(kTrim);
     myEqSettings.bands = defaultMyEqBands();
+    standaloneUi = wrapperType == wrapperType_Standalone;
     startTimerHz(30);
 }
 
@@ -438,6 +440,103 @@ bool BteqProcessor::myEqActive() const {
 void BteqProcessor::timerCallback() {
     rebuild(false);
     freeAllRetired();
+    updateApo();
+}
+
+// ---------------------------------------------------------------------------
+// Equalizer APO (standalone, message thread)
+// ---------------------------------------------------------------------------
+void BteqProcessor::setApoOutput(bool on) {
+    apoWanted = on;
+    apoProblem.clear();
+    updateApo();
+}
+
+void BteqProcessor::updateApo() {
+    if (!standaloneUi) return;
+    if (apoWanted && !apo.running()) {
+        juce::String error;
+        if (!apo.start(error)) {
+            apoWanted = false;
+            apoProblem = error;
+            return;
+        }
+        apoLastText.clear();
+        apoPendingText.clear();
+    } else if (!apoWanted && apo.running()) {
+        apo.stop();
+    }
+    apoRunning = apo.running();
+    if (!apo.running()) return;
+
+    // Written once the settings have held still for a moment, so a knob drag
+    // doesn't make APO reload its config many times a second.
+    const auto text = apoConfigText();
+    const auto now = juce::Time::getMillisecondCounter();
+    if (text == apoLastText) return;
+    if (text != apoPendingText) {
+        apoPendingText = text;
+        apoPendingSince = now;
+        if (apoLastText.isNotEmpty()) return;
+    } else if (now - apoPendingSince < 250) {
+        return;
+    }
+    juce::String error;
+    if (apo.write(text, error)) {
+        apoLastText = text;
+        apoProblem.clear();
+    } else {
+        apoProblem = error;
+        apoLastText = text; // don't retry on every tick; the next change tries again
+    }
+}
+
+// The same EQ the plugin applies, in Equalizer APO's own syntax: correction
+// (scaled by the correction amount), then My EQ, with one preamp for all of
+// it including the output trim.
+juce::String BteqProcessor::apoConfigText() const {
+    const juce::ScopedLock sl(buildLock);
+    std::vector<std::string> lines;
+    const auto* p = selectedProfile();
+    lines.push_back("# Written by Born To EQ The World. Change the EQ in BEQ; edits here are overwritten.");
+    if (p != nullptr)
+        lines.push_back("# " + (headphoneName + " | " + juce::String(p->source) + (p->rig.empty() ? "" : " (" + juce::String(p->rig) + ")")
+                                + " | " + juce::String(p->target) + (match.active ? " | sounds like " + matchName : "")).toStdString());
+    if (bypassParam->load() > 0.5f) {
+        lines.push_back("# Bypassed");
+        return juce::String(bteq::apo::joinLines(lines));
+    }
+    const double k = juce::jlimit(0.0, 1.0, (double)amountParam->load() / 100.0);
+    double preamp = trimParam->load();
+    std::vector<std::string> body;
+    if (p != nullptr) {
+        if (graphicModeActive()) {
+            // The preamp is part of the curve, exactly as BEQ's graphic filter is built.
+            const double pre = preampSettingDb();
+            auto gains = graphicShapeDb();
+            for (auto& g : gains) g = (g + pre) * k;
+            body.push_back(bteq::apo::graphicLine(holder->library.graphicFrequencies(), gains));
+        } else {
+            const auto preset = effectiveParametric();
+            preamp += preset.preampDb * k;
+            for (const auto& f : preset.filters)
+                if (f.enabled) body.push_back(bteq::apo::filterLine(f, k));
+        }
+    }
+    if (myEqSettings.on) {
+        bool any = false;
+        for (const auto& b : myEqSettings.bands)
+            if (b.enabled && std::abs(b.gainDb) > 0.01) {
+                if (!any) body.push_back("# My EQ");
+                any = true;
+                body.push_back(bteq::apo::filterLine(b, 1.0));
+            }
+        if (any || std::abs(myEqSettings.gainDb) > 0.001)
+            preamp += myEqSettings.autoGain ? myEqRecommended.load() : myEqSettings.gainDb;
+    }
+    lines.push_back("Preamp: " + bteq::apo::num(preamp, 3) + " dB");
+    lines.insert(lines.end(), body.begin(), body.end());
+    return juce::String(bteq::apo::joinLines(lines));
 }
 
 void BteqProcessor::rebuild(bool force) {
@@ -639,7 +738,8 @@ void BteqProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
         }
     }
 
-    const bool bypass = bypassParam->load() > 0.5f;
+    // While Equalizer APO applies the EQ system-wide, the standalone's own path stays clean (no double EQ).
+    const bool bypass = bypassParam->load() > 0.5f || apoRunning.load();
     const int chans = juce::jmin(buffer.getNumChannels(), 2);
     bool usedGraphic = false, usedEq = false, usedExtra = false;
     if (!bypass) {
@@ -660,7 +760,7 @@ void BteqProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     retireFading(eqSlot, usedEq);
     retireFading(extraSlot, usedExtra);
 
-    trimGain.setTargetValue(juce::Decibels::decibelsToGain(trimParam->load()));
+    trimGain.setTargetValue(apoRunning.load() ? 1.0f : juce::Decibels::decibelsToGain(trimParam->load()));
     trimGain.applyGain(buffer, n);
 }
 
@@ -682,6 +782,7 @@ void BteqProcessor::getStateInformation(juce::MemoryBlock& destData) {
     state.setProperty("sidebarCollapsed", sidebarCollapsed, nullptr);
     state.setProperty("headphoneCollapsed", headphoneCollapsed, nullptr);
     state.setProperty("targetCollapsed", targetCollapsed, nullptr);
+    if (standaloneUi) state.setProperty("apoOutput", apoWanted, nullptr);
     {
         const juce::ScopedLock sl(buildLock);
         writeMyEq(state, myEqSettings);
@@ -737,6 +838,7 @@ void BteqProcessor::setStateInformation(const void* data, int sizeInBytes) {
     headphoneCollapsed = (bool)state.getProperty("headphoneCollapsed", false);
     targetCollapsed = (bool)state.getProperty("targetCollapsed", false);
     readMyEq(state);
+    if (standaloneUi) apoWanted = (bool)state.getProperty("apoOutput", false); // started by the timer
     profileIndex = indexForKey(headphoneName, state.getProperty("profile").toString());
     {
         const juce::ScopedLock sl(buildLock);
