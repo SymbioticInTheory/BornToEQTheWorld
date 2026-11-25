@@ -371,6 +371,7 @@ void BteqProcessor::setMyEqOn(bool on) {
 void BteqProcessor::resetMyEq() {
     const juce::ScopedLock sl(buildLock);
     myEqSettings.bands = defaultMyEqBands();
+    myEqSettings.gainDb = 0;
     ++myEqVersion;
     rebuild(false);
 }
@@ -400,11 +401,27 @@ void BteqProcessor::syncMyEq() {
     ++myEqVersion;
 }
 
+void BteqProcessor::setMyEqGain(double db) {
+    const juce::ScopedLock sl(buildLock);
+    myEqSettings.gainDb = juce::jlimit(-24.0, 12.0, db);
+    myEqSettings.autoGain = false; // turning the knob takes over from automatic gain
+    ++myEqVersion;
+    rebuild(false);
+}
+
+void BteqProcessor::setMyEqAutoGain(bool on) {
+    const juce::ScopedLock sl(buildLock);
+    myEqSettings.autoGain = on;
+    if (!on) myEqSettings.gainDb = myEqRecommended.load(); // keep the level where it was
+    ++myEqVersion;
+    rebuild(false);
+}
+
 bool BteqProcessor::myEqEdited() const {
     const juce::ScopedLock sl(buildLock);
     for (const auto& b : myEqSettings.bands)
         if (std::abs(b.gainDb) > 0.01 || !b.enabled) return true;
-    return false;
+    return std::abs(myEqSettings.gainDb) > 0.01 || myEqSettings.autoGain;
 }
 
 bool BteqProcessor::myEqActive() const {
@@ -501,11 +518,15 @@ void BteqProcessor::buildMyEq(double sr) {
         for (const auto& b : myEqSettings.bands)
             if (b.enabled && std::abs(b.gainDb) > 0.01) preset.filters.push_back(b);
     auto engine = std::make_unique<IirEngine>();
-    // Its own headroom: the level drops by its highest boost, so it can't clip
-    // more than the correction alone.
+    // Recommended gain: down by its highest boost, so it can't clip more than
+    // the correction alone. Used when automatic gain is on; otherwise the knob.
     engine->eq.prepare(preset, sr, 2, 1.0, /*autoPreamp*/ true);
-    myEqPreampDb = preset.filters.empty() ? 0.0 : engine->eq.getPreampDb();
-    myEqRunning = !preset.filters.empty();
+    const double recommended = preset.filters.empty() ? 0.0 : engine->eq.getPreampDb();
+    myEqRecommended = recommended;
+    preset.preampDb = myEqSettings.on ? (myEqSettings.autoGain ? recommended : myEqSettings.gainDb) : 0.0;
+    engine->eq.prepare(preset, sr, 2, 1.0, /*autoPreamp*/ false);
+    myEqPreampDb = preset.preampDb;
+    myEqRunning = !preset.filters.empty() || std::abs(preset.preampDb) > 0.001;
     publish(extraSlot, std::move(engine));
 }
 
@@ -658,18 +679,19 @@ void BteqProcessor::getStateInformation(juce::MemoryBlock& destData) {
     state.setProperty("uiScale", uiScale, nullptr);
     state.setProperty("match", matchName, nullptr);
     state.setProperty("editingMyEq", editingMyEq, nullptr);
+    state.setProperty("sidebarCollapsed", sidebarCollapsed, nullptr);
+    state.setProperty("headphoneCollapsed", headphoneCollapsed, nullptr);
+    state.setProperty("targetCollapsed", targetCollapsed, nullptr);
     {
         const juce::ScopedLock sl(buildLock);
-        state.setProperty("myEq", filtersToString(myEqSettings.bands), nullptr);
-        state.setProperty("myEqOn", myEqSettings.on, nullptr);
+        writeMyEq(state, myEqSettings);
         state.setProperty("myEqPerTarget", myEqPerTargetFlag, nullptr);
         juce::ValueTree others("MYEQS");
         for (const auto& [key, m] : myEqByTarget) {
             if (key == myEqKey) continue;
             juce::ValueTree t("MYEQ");
             t.setProperty("key", key, nullptr);
-            t.setProperty("myEq", filtersToString(m.bands), nullptr);
-            t.setProperty("myEqOn", m.on, nullptr);
+            writeMyEq(t, m);
             others.appendChild(t, nullptr);
         }
         state.appendChild(others, nullptr);
@@ -711,6 +733,9 @@ void BteqProcessor::setStateInformation(const void* data, int sizeInBytes) {
     hiddenCurves = (int)state.getProperty("hiddenCurves", 0);
     uiScale = (float)state.getProperty("uiScale", 0.0);
     editingMyEq = (bool)state.getProperty("editingMyEq", false);
+    sidebarCollapsed = (bool)state.getProperty("sidebarCollapsed", false);
+    headphoneCollapsed = (bool)state.getProperty("headphoneCollapsed", false);
+    targetCollapsed = (bool)state.getProperty("targetCollapsed", false);
     readMyEq(state);
     profileIndex = indexForKey(headphoneName, state.getProperty("profile").toString());
     {
@@ -744,9 +769,7 @@ juce::ValueTree BteqProcessor::makeSnapshot() const {
     t.setProperty("amount", (double)amountParam->load(), nullptr);
     t.setProperty("match", matchName, nullptr);
     if (const auto* e = currentEdit()) writeEdit(t, *e);
-    const auto mine = myEq();
-    t.setProperty("myEq", filtersToString(mine.bands), nullptr);
-    t.setProperty("myEqOn", mine.on, nullptr);
+    writeMyEq(t, myEq());
     return t;
 }
 
@@ -782,7 +805,29 @@ BteqProcessor::MyEq BteqProcessor::parseMyEq(const juce::ValueTree& t) {
     // Older settings had fewer bands: keep them exactly and add the new ones, flat, after them.
     for (size_t i = m.bands.size(); i < defaults.size(); ++i) m.bands.push_back(defaults[i]);
     m.on = (bool)t.getProperty("myEqOn", true);
+    if (t.hasProperty("myEqGain")) {
+        m.gainDb = (double)t.getProperty("myEqGain");
+        m.autoGain = (bool)t.getProperty("myEqAutoGain", false);
+    } else {
+        // Saved before the gain knob, when the gain was always automatic:
+        // set the knob to what that was, so it sounds exactly the same.
+        bteq::ParametricPreset preset;
+        for (const auto& b : m.bands)
+            if (b.enabled && std::abs(b.gainDb) > 0.01) preset.filters.push_back(b);
+        if (!preset.filters.empty()) {
+            bteq::ParametricEq eq;
+            eq.prepare(preset, 48000.0, 1, 1.0, true);
+            m.gainDb = eq.getPreampDb();
+        }
+    }
     return m;
+}
+
+void BteqProcessor::writeMyEq(juce::ValueTree& t, const MyEq& m) {
+    t.setProperty("myEq", filtersToString(m.bands), nullptr);
+    t.setProperty("myEqOn", m.on, nullptr);
+    t.setProperty("myEqGain", m.gainDb, nullptr);
+    t.setProperty("myEqAutoGain", m.autoGain, nullptr);
 }
 
 void BteqProcessor::readMyEq(const juce::ValueTree& t) {

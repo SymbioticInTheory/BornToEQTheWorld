@@ -89,28 +89,6 @@ private:
     std::array<juce::Rectangle<float>, numCurves> legendHit;
 };
 
-// Filter cards. Each value is a label you can click and type into.
-class FiltersPanel : public juce::Component {
-public:
-    static constexpr int maxCards = 10;
-    FiltersPanel(BteqProcessor& p, const Theme& t);
-    void paint(juce::Graphics&) override;
-    void resized() override;
-    void refresh(); // update the values from the processor (message thread)
-    void mouseDown(const juce::MouseEvent&) override; // click a My EQ band's type to change it
-    juce::Colour accent;
-
-private:
-    enum Field { Freq, Gain, Q, numFields };
-    std::vector<bteq::FilterSpec> shownFilters() const;
-    juce::TextButton myEqOnButton { "On" };
-    juce::Rectangle<int> cardBounds(int i) const;
-    void commit(int card, Field field, const juce::String& text);
-    BteqProcessor& proc;
-    const Theme& theme;
-    std::array<std::array<juce::Label, numFields>, maxCards> values;
-};
-
 // Rotary knob that reports right-clicks (used to type an exact value).
 class ValueKnob : public juce::Slider {
 public:
@@ -125,6 +103,30 @@ public:
         }
         juce::Slider::mouseDown(e);
     }
+};
+
+// Filter cards. Each value is a label you can click and type into.
+class FiltersPanel : public juce::Component {
+public:
+    static constexpr int maxCards = 10;
+    FiltersPanel(BteqProcessor& p, const Theme& t);
+    void paint(juce::Graphics&) override;
+    void resized() override;
+    void refresh(); // update the values from the processor (message thread)
+    void mouseDown(const juce::MouseEvent&) override; // click a My EQ band's type to change it
+    juce::Colour accent;
+
+private:
+    enum Field { Freq, Gain, Q, numFields };
+    std::vector<bteq::FilterSpec> shownFilters() const;
+    juce::TextButton myEqOnButton { "On" }, autoGainButton { "Auto" };
+    ValueKnob gainKnob; // My EQ's own gain
+    juce::Label gainValue;
+    juce::Rectangle<int> cardBounds(int i) const;
+    void commit(int card, Field field, const juce::String& text);
+    BteqProcessor& proc;
+    const Theme& theme;
+    std::array<std::array<juce::Label, numFields>, maxCards> values;
 };
 
 class BteqEditor : public juce::AudioProcessorEditor, private juce::Timer {
@@ -179,6 +181,11 @@ private:
         void listBoxItemClicked(int row, const juce::MouseEvent&) override;
     };
 
+    // Panel rectangles, worked out by layoutContent() from what is collapsed.
+    juce::Rectangle<int> rHeadphone, rTarget, rTabs, rGraph, rFilters, rCorrection, rSummary, rColour;
+    void toggleCollapse(int what); // 0 whole left side, 1 headphone box, 2 target box
+    juce::String headphoneSummary() const, targetSummary() const;
+
     BteqProcessor& proc;
     juce::SharedResourcePointer<Theme> theme;
     BteqLookAndFeel lnf;
@@ -211,6 +218,7 @@ private:
 
     juce::Label preampValue;
     juce::TextButton resetButton { "Reset" };
+    juce::TextButton collapseButton { juce::String::fromUTF8("\xc2\xab") }, expandButton { "Show" }; // the left side
     juce::TextButton savedButton;
     juce::String loadedSavedName;      // the saved profile shown on the dropdown
     juce::String loadedSavedSelection; // headphone + profile it was loaded for

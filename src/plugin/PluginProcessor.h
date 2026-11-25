@@ -101,6 +101,8 @@ public:
     struct MyEq {
         bool on = true;
         std::vector<bteq::FilterSpec> bands;
+        double gainDb = 0;     // its own gain knob
+        bool autoGain = false; // when on, the gain follows the recommended value
     };
     static std::vector<bteq::FilterSpec> defaultMyEqBands();
     MyEq myEq() const;
@@ -113,7 +115,10 @@ public:
     void setMyEqPerTarget(bool perTarget);
     bool myEqEdited() const;  // any band moved from 0 dB
     bool myEqActive() const;  // on and doing something
-    double myEqHeadroomDb() const { return myEqPreampDb.load(); } // level drop so its boosts can't clip
+    double myEqGainNowDb() const { return myEqPreampDb.load(); }          // gain applied now
+    double myEqRecommendedDb() const { return myEqRecommended.load(); }   // minus its highest boost, so it can't clip
+    void setMyEqGain(double db);
+    void setMyEqAutoGain(bool on);
 
     // Snapshot of the current choice (headphone, profile, mode, correction and
     // your edits), used by the saved profiles menu.
@@ -122,6 +127,7 @@ public:
 
     int accentIndex = 0; // UI colour choice, saved with the session
     bool editingMyEq = false;  // UI: graph and cards show My EQ
+    bool sidebarCollapsed = false, headphoneCollapsed = false, targetCollapsed = false; // UI, saved with the session
     bool advancedView = false; // UI: target and result curves, saved with the session
     int hiddenCurves = 0;      // UI: bit mask of curves switched off in the advanced legend
     float uiScale = 0.0f;      // UI: window scale, 0 = use the last scale picked in any instance
@@ -136,6 +142,7 @@ private:
     void buildMyEq(double sr);
     void readMyEq(const juce::ValueTree& t);
     static MyEq parseMyEq(const juce::ValueTree& t);
+    static void writeMyEq(juce::ValueTree& t, const MyEq& m);
     void syncMyEq(); // per-target mode: swap in the My EQ of the selected target
     bool myEqPerTargetFlag = false;
     std::map<juce::String, MyEq> myEqByTarget; // per-target mode, other targets than the selected one
@@ -143,7 +150,7 @@ private:
     MyEq myEqSettings;
     int myEqVersion = 0, builtMyEqVersion = -1;
     double builtMyEqRate = 0;
-    std::atomic<double> myEqPreampDb { 0.0 };
+    std::atomic<double> myEqPreampDb { 0.0 }, myEqRecommended { 0.0 };
     std::atomic<bool> myEqRunning { false };
 
     juce::SharedResourcePointer<LibraryHolder> holder;
