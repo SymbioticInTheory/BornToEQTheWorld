@@ -27,9 +27,6 @@ juce::String Theme::accentName(int index) {
 
 namespace {
 // Layout of the 1080 x 680 window (matches the agreed mockup).
-const juce::Rectangle<int> kHeadphonePanel { 18, 90, 312, 254 }, kTargetPanel { 18, 358, 312, 304 },
-    kTabsPanel { 346, 90, 276, 48 }, kGraphPanel { 346, 150, 716, 290 }, kFiltersPanel { 346, 452, 466, 210 },
-    kCorrectionPanel { 826, 452, 236, 210 };
 
 void drawPanel(juce::Graphics& g, juce::Rectangle<int> r) {
     g.setColour(Theme::panel);
@@ -667,6 +664,42 @@ FiltersPanel::FiltersPanel(BteqProcessor& p, const Theme& t) : proc(p), theme(t)
         getParentComponent()->repaint();
     };
     addChildComponent(myEqOnButton);
+
+    // My EQ's gain: a knob, or automatic (down by its highest boost).
+    autoGainButton.getProperties().set("kind", "pill");
+    autoGainButton.setClickingTogglesState(true);
+    autoGainButton.setTooltip("Automatic gain: follows the recommended level, down by My EQ's highest boost so it "
+                              "can't clip. Off: the knob sets it.");
+    autoGainButton.onClick = [this] {
+        proc.setMyEqAutoGain(autoGainButton.getToggleState());
+        refresh();
+        getParentComponent()->repaint();
+    };
+    addChildComponent(autoGainButton);
+    gainKnob.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    gainKnob.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    gainKnob.setRange(-24.0, 12.0, 0.1);
+    gainKnob.setMouseDragSensitivity(360);
+    gainKnob.setTitle("My EQ gain");
+    gainKnob.setTooltip("My EQ's gain. Drag to set it, right-click to type, double-click for 0 dB.");
+    gainKnob.onValueChange = [this] {
+        if (std::abs(gainKnob.getValue() - proc.myEqGainNowDb()) > 0.04) proc.setMyEqGain(gainKnob.getValue());
+        refresh();
+    };
+    gainKnob.onRightClick = [this] { gainValue.showEditor(); };
+    gainKnob.onDoubleClick = [this] { proc.setMyEqGain(0.0); refresh(); };
+    addChildComponent(gainKnob);
+    gainValue.setFont(theme.labelFont(14.0f));
+    gainValue.setColour(juce::Label::textColourId, Theme::text);
+    gainValue.setBorderSize({ 0, 0, 0, 0 });
+    gainValue.setEditable(false, true, false);
+    gainValue.setTooltip("Double-click to type My EQ's gain");
+    gainValue.onTextChange = [this] {
+        const double v = parseTyped(gainValue.getText(), false);
+        if (!std::isnan(v)) proc.setMyEqGain(v);
+        refresh();
+    };
+    addChildComponent(gainValue);
 }
 
 std::vector<bteq::FilterSpec> FiltersPanel::shownFilters() const {
@@ -708,7 +741,10 @@ juce::Rectangle<int> FiltersPanel::cardBounds(int i) const {
 }
 
 void FiltersPanel::resized() {
-    myEqOnButton.setBounds(getWidth() - 64 - 8 - 62, getHeight() - 22, 62, 22);
+    myEqOnButton.setBounds(getWidth() - 64 - 8 - 56, getHeight() - 22, 56, 22);
+    gainKnob.setBounds(40, getHeight() - 26, 26, 26);
+    gainValue.setBounds(70, getHeight() - 22, 64, 22);
+    autoGainButton.setBounds(136, getHeight() - 22, 56, 22);
     for (int i = 0; i < maxCards; ++i) {
         auto r = cardBounds(i).reduced(9, 6);
         r.removeFromTop(16);
@@ -721,6 +757,15 @@ void FiltersPanel::resized() {
 void FiltersPanel::refresh() {
     const auto filters = shownFilters();
     myEqOnButton.setVisible(proc.editingMyEq);
+    for (juce::Component* c : { (juce::Component*)&gainKnob, (juce::Component*)&gainValue, (juce::Component*)&autoGainButton })
+        c->setVisible(proc.editingMyEq);
+    const auto mine = proc.myEq();
+    autoGainButton.setToggleState(mine.autoGain, juce::dontSendNotification);
+    const double gainNow = proc.myEqGainNowDb();
+    if (!gainKnob.isMouseButtonDown() && std::abs(gainKnob.getValue() - gainNow) > 0.04)
+        gainKnob.setValue(gainNow, juce::dontSendNotification);
+    if (!gainValue.isBeingEdited() && gainValue.getText() != formatDb(gainNow))
+        gainValue.setText(formatDb(gainNow), juce::dontSendNotification);
     myEqOnButton.setToggleState(proc.myEq().on, juce::dontSendNotification);
     myEqOnButton.setButtonText(proc.myEq().on ? "On" : "Off");
     for (int i = 0; i < maxCards; ++i) {
@@ -847,9 +892,13 @@ void FiltersPanel::paint(juce::Graphics& g) {
     g.setFont(theme.bodyFont(12.0f));
     juce::String hint;
     if (proc.editingMyEq) {
-        hint = "Click a number to switch a band off, a type to change it";
-        if (proc.myEqActive()) hint = "Number: on/off. Type: change it. Headroom " + formatDb(proc.myEqHeadroomDb());
-        g.drawText(hint, footer.withTrimmedRight(64 + 8 + 62 + 6), juce::Justification::centredLeft, true);
+        // Gain controls along the bottom; the recommended level next to them.
+        g.setFont(theme.labelFont(12.0f));
+        g.drawText("GAIN", footer.withWidth(38), juce::Justification::centredLeft);
+        g.setFont(theme.bodyFont(12.0f));
+        if (!proc.myEq().autoGain)
+            g.drawText("Recommended " + formatDb(proc.myEqRecommendedDb()), footer.withTrimmedLeft(200).withTrimmedRight(64 + 8 + 56 + 6),
+                       juce::Justification::centredLeft, true);
         return;
     }
     hint = "Click a number to switch a filter off, a value to type it; drag or scroll points on the graph";
@@ -1095,6 +1144,15 @@ BteqEditor::BteqEditor(BteqProcessor& p)
     content.addAndMakeVisible(preampKnob);
     preampValue.setEditable(false, true, false);
 
+    for (auto* b : { &collapseButton, &expandButton }) {
+        b->getProperties().set("kind", "small");
+        content.addChildComponent(*b);
+    }
+    collapseButton.setTooltip("Hide the headphone and target boxes to make the EQ wider");
+    expandButton.setTooltip("Show the headphone and target boxes");
+    collapseButton.onClick = [this] { toggleCollapse(0); };
+    expandButton.onClick = [this] { toggleCollapse(0); };
+
     content.addMouseListener(this, true);
     addAndMakeVisible(content);
     setAccent(proc.accentIndex);
@@ -1171,10 +1229,12 @@ void BteqEditor::timerCallback() {
     refreshEditing();
     graph.repaint();
     filters.repaint();
-    content.repaint(kCorrectionPanel.withHeight(40));
-    content.repaint(kCorrectionPanel.withTrimmedTop(100).withHeight(30));
+    content.repaint(rCorrection.withHeight(40));
+    content.repaint(rCorrection.withTrimmedTop(100).withHeight(30));
     content.repaint(juce::Rectangle<int>(680, 0, 250, 72));
-    content.repaint(kTabsPanel.withX(kTabsPanel.getRight()).withWidth(kGraphPanel.getRight() - kTabsPanel.getRight()));
+    content.repaint(rTabs.withX(rTabs.getRight()).withWidth(rGraph.getRight() - rTabs.getRight()));
+    content.repaint(rHeadphone.withHeight(44));
+    content.repaint(rTarget.withHeight(44));
 }
 
 void BteqEditor::paint(juce::Graphics& g) { g.fillAll(juce::Colour(0xff0B0C0D)); }
@@ -1207,19 +1267,39 @@ void BteqEditor::paintContent(juce::Graphics& g) {
     g.drawText("PREAMP", 686, 20, 66, 32, juce::Justification::centredRight);
 
     // Panels.
-    for (auto r : { kHeadphonePanel, kTargetPanel, kTabsPanel, kGraphPanel, kFiltersPanel, kCorrectionPanel }) drawPanel(g, r);
+    for (auto r : { rHeadphone, rTarget, rTabs, rGraph, rFilters, rCorrection, rSummary, rColour })
+        if (!r.isEmpty()) drawPanel(g, r);
 
     g.setFont(theme->labelFont(15.0f));
     g.setColour(Theme::muted);
-    g.drawText("HEADPHONE", kHeadphonePanel.getX() + 14, kHeadphonePanel.getY() + 12, 200, 18, juce::Justification::centredLeft);
-    g.drawText("TARGET", kTargetPanel.getX() + 14, kTargetPanel.getY() + 12, 200, 18, juce::Justification::centredLeft);
-    g.drawText("CORRECTION", kCorrectionPanel.getX() + 14, kCorrectionPanel.getY() + 16, 120, 18, juce::Justification::centredLeft);
-    g.setFont(theme->labelFont(12.0f));
-    g.setColour(Theme::muted.withAlpha(0.7f));
-    g.drawText("COLOUR", kCorrectionPanel.getX() + 14, kCorrectionPanel.getBottom() - 32, 100, 20, juce::Justification::centredLeft);
+    // Box headings with a fold arrow; a folded box shows what is chosen.
+    auto heading = [&](juce::Rectangle<int> r, const char* label, bool folded, const juce::String& chosen, int trimRight) {
+        if (r.isEmpty()) return;
+        juce::Path arrow;
+        const float ax = (float)r.getX() + 18.0f, ay = (float)r.getY() + 21.0f;
+        if (folded) arrow.addTriangle(ax - 3, ay - 5, ax - 3, ay + 5, ax + 4, ay);
+        else arrow.addTriangle(ax - 5, ay - 3, ax + 5, ay - 3, ax, ay + 4);
+        g.setColour(Theme::muted);
+        g.fillPath(arrow);
+        g.setFont(theme->labelFont(15.0f));
+        g.drawText(label, r.getX() + 30, r.getY() + 12, 120, 18, juce::Justification::centredLeft);
+        if (folded) {
+            const int lw = (int)juce::GlyphArrangement::getStringWidth(theme->labelFont(15.0f), label);
+            g.setColour(Theme::text);
+            g.setFont(theme->bodyFont(14.0f, true));
+            g.drawText(chosen, r.getX() + 30 + lw + 12, r.getY() + 12, r.getWidth() - 30 - lw - 24 - trimRight, 18,
+                       juce::Justification::centredLeft, true);
+        }
+    };
+    heading(rHeadphone, "HEADPHONE", proc.headphoneCollapsed, headphoneSummary(), 36);
+    heading(rTarget, "TARGET", proc.targetCollapsed, targetSummary(), 0);
+    g.setFont(theme->labelFont(15.0f));
+    g.setColour(Theme::muted);
+    g.drawText("CORRECTION", rCorrection.getX() + 14, rCorrection.getY() + 16, 120, 18, juce::Justification::centredLeft);
+
 
     // Search icon.
-    {
+    if (search.isVisible()) {
         const auto sb = search.getBounds().toFloat();
         g.setColour(Theme::muted);
         g.drawEllipse(sb.getX() + 13, sb.getCentreY() - 7, 11, 11, 1.8f);
@@ -1245,14 +1325,25 @@ void BteqEditor::paintContent(juce::Graphics& g) {
         if (proc.selectionEdited()) note << ", edited by you";
         if (proc.myEqActive()) note << ", plus My EQ";
     }
-    g.drawText(note, kTabsPanel.getRight() + 14, kTabsPanel.getY(), kGraphPanel.getRight() - kTabsPanel.getRight() - 14,
-               kTabsPanel.getHeight(), juce::Justification::centredRight);
+    if (rSummary.isEmpty()) {
+        g.drawText(note, rTabs.getRight() + 14, rTabs.getY(), rGraph.getRight() - rTabs.getRight() - 14,
+                   rTabs.getHeight(), juce::Justification::centredRight);
+    } else {
+        // Left side hidden: what is selected, then the note.
+        auto r = rSummary.withTrimmedLeft(74).withTrimmedRight(14).reduced(0, 5);
+        g.setColour(Theme::text);
+        g.setFont(theme->bodyFont(14.0f, true));
+        g.drawText(headphoneSummary() + "  /  " + targetSummary(), r.removeFromTop(19), juce::Justification::centredLeft, true);
+        g.setColour(Theme::muted);
+        g.setFont(theme->bodyFont(12.5f));
+        g.drawText(note, r, juce::Justification::centredLeft, true);
+    }
 
     // Correction readouts.
     const int pct = (int)std::round(proc.params.getRawParameterValue("amount")->load());
     g.setColour(Theme::textBright);
     g.setFont(theme->labelFont(36.0f).withExtraKerningFactor(0.0f));
-    g.drawText(juce::String(pct) + "%", kCorrectionPanel.getRight() - 114, kCorrectionPanel.getY() + 8, 100, 38,
+    g.drawText(juce::String(pct) + "%", rCorrection.getRight() - 114, rCorrection.getY() + 8, 100, 38,
                juce::Justification::centredRight);
     g.setFont(theme->bodyFont(12.0f));
     g.setColour(Theme::muted);
@@ -1262,42 +1353,95 @@ void BteqEditor::paintContent(juce::Graphics& g) {
     g.drawText("Full", sl.getRight() - 40, sl.getBottom() + 2, 40, 14, juce::Justification::centredRight);
     g.setFont(theme->bodyFont(13.0f));
     g.setColour(juce::Colour(0xffB2AFA9));
-    g.drawText("Preamp applied now", kCorrectionPanel.getX() + 14, kCorrectionPanel.getY() + 104, 150, 20,
+    g.drawText("Preamp applied now", rCorrection.getX() + 14, rCorrection.getY() + 104, 150, 20,
                juce::Justification::centredLeft);
     g.setColour(Theme::text);
-    g.drawText(formatDb(pre), kCorrectionPanel.getRight() - 114, kCorrectionPanel.getY() + 104, 100, 20,
+    g.drawText(formatDb(pre), rCorrection.getRight() - 114, rCorrection.getY() + 104, 100, 20,
                juce::Justification::centredRight);
-    g.setColour(juce::Colour(0x14ffffff));
-    g.drawHorizontalLine(kCorrectionPanel.getBottom() - 40, (float)kCorrectionPanel.getX() + 14, (float)kCorrectionPanel.getRight() - 14);
+
 
     if (!proc.libraryLoaded()) {
         g.setColour(juce::Colour(0xffFFB5A6));
         g.setFont(theme->bodyFont(14.0f));
-        g.drawText("The headphone library could not be loaded.", kTargetPanel.reduced(14), juce::Justification::centred);
+        g.drawText("The headphone library could not be loaded.", rTarget.reduced(14), juce::Justification::centred);
     }
 }
 
 void BteqEditor::resized() {}
 
 void BteqEditor::layoutContent() {
+    // Left side: headphone and target boxes, each can fold down to its heading.
+    // With the whole left side hidden, the EQ takes the full width and a
+    // summary next to the tabs says what is selected.
+    const int top = 90, bottom = 662, left = 18, gap = 14, headH = 44, sideW = 312;
+    const bool side = !proc.sidebarCollapsed;
+    if (side) {
+        const int hpH = proc.headphoneCollapsed ? headH
+                      : proc.targetCollapsed     ? bottom - top - gap - headH
+                                                 : 254;
+        rHeadphone = { left, top, sideW, hpH };
+        const int tgY = rHeadphone.getBottom() + gap;
+        rTarget = { left, tgY, sideW, proc.targetCollapsed ? headH : bottom - tgY };
+    } else {
+        rHeadphone = rTarget = {};
+    }
+    const int x = side ? left + sideW + 16 : left, right = 1062;
+    rTabs = { x, top, 276, 48 };
+    rSummary = side ? juce::Rectangle<int>() : juce::Rectangle<int>(rTabs.getRight() + gap, top, right - rTabs.getRight() - gap, 48);
+    rGraph = { x, 150, right - x, 290 };
+    // Correction box, with the colour dots in their own small box under its right half.
+    rColour = { 1062 - 118, bottom - 36, 118, 36 };
+    rCorrection = { 826, 452, 236, rColour.getY() - gap - 452 };
+    rFilters = { x, 452, rCorrection.getX() - 14 - x, bottom - 452 };
+
+    const bool showHp = side && !proc.headphoneCollapsed, showTg = side && !proc.targetCollapsed;
+    search.setVisible(showHp);
+    headphoneList.setVisible(showHp);
+    targetList.setVisible(showTg);
+    collapseButton.setVisible(side);
+    expandButton.setVisible(!side);
+    collapseButton.setBounds(rHeadphone.getRight() - 10 - 30, rHeadphone.getY() + 10, 30, 22);
+    expandButton.setBounds(rSummary.getX() + 10, rSummary.getY() + 13, 52, 22);
+
     bypassButton.setBounds(1080 - 26 - 110, 14, 110, 44);
     preampKnob.setBounds(756, 13, 46, 46);
-    search.setBounds(kHeadphonePanel.getX() + 14, kHeadphonePanel.getY() + 38, kHeadphonePanel.getWidth() - 28, 44);
-    headphoneList.setBounds(kHeadphonePanel.getX() + 10, kHeadphonePanel.getY() + 90, kHeadphonePanel.getWidth() - 20,
-                            kHeadphonePanel.getHeight() - 100);
-    targetList.setBounds(kTargetPanel.getX() + 10, kTargetPanel.getY() + 38, kTargetPanel.getWidth() - 20,
-                         kTargetPanel.getHeight() - 48);
-    parametricTab.setBounds(kTabsPanel.getX() + 4, kTabsPanel.getY() + 4, 132, 40);
-    graphicTab.setBounds(kTabsPanel.getX() + 140, kTabsPanel.getY() + 4, 132, 40);
-    graph.setBounds(kGraphPanel.reduced(12, 8));
-    filters.setBounds(kFiltersPanel.reduced(12));
-    correction.setBounds(kCorrectionPanel.getX() + 12, kCorrectionPanel.getY() + 58, kCorrectionPanel.getWidth() - 24, 26);
+    search.setBounds(rHeadphone.getX() + 14, rHeadphone.getY() + 38, rHeadphone.getWidth() - 28, 44);
+    headphoneList.setBounds(rHeadphone.getX() + 10, rHeadphone.getY() + 90, rHeadphone.getWidth() - 20,
+                            rHeadphone.getHeight() - 100);
+    targetList.setBounds(rTarget.getX() + 10, rTarget.getY() + 38, rTarget.getWidth() - 20,
+                         rTarget.getHeight() - 48);
+    parametricTab.setBounds(rTabs.getX() + 4, rTabs.getY() + 4, 132, 40);
+    graphicTab.setBounds(rTabs.getX() + 140, rTabs.getY() + 4, 132, 40);
+    graph.setBounds(rGraph.reduced(12, 8));
+    filters.setBounds(rFilters.reduced(12));
+    correction.setBounds(rCorrection.getX() + 12, rCorrection.getY() + 58, rCorrection.getWidth() - 24, 26);
     preampValue.setBounds(808, 20, 100, 32);
-    resetButton.setBounds(kFiltersPanel.getRight() - 12 - 64, kFiltersPanel.getBottom() - 12 - 20, 64, 22);
+    resetButton.setBounds(rFilters.getRight() - 12 - 64, rFilters.getBottom() - 12 - 20, 64, 22);
     savedButton.setBounds(462, 18, 210, 36);
+    const int dot = 20, dotGap = 6, dotsW = Theme::numAccents * dot + (Theme::numAccents - 1) * dotGap;
     for (int i = 0; i < Theme::numAccents; ++i)
-        swatches[(size_t)i].setBounds(kCorrectionPanel.getRight() - 12 - (Theme::numAccents - i) * 22,
-                                      kCorrectionPanel.getBottom() - 32, 20, 20);
+        swatches[(size_t)i].setBounds(rColour.getX() + (rColour.getWidth() - dotsW) / 2 + i * (dot + dotGap),
+                                      rColour.getCentreY() - dot / 2, dot, dot);
+}
+
+void BteqEditor::toggleCollapse(int what) {
+    if (what == 0) proc.sidebarCollapsed = !proc.sidebarCollapsed;
+    if (what == 1) proc.headphoneCollapsed = !proc.headphoneCollapsed;
+    if (what == 2) proc.targetCollapsed = !proc.targetCollapsed;
+    layoutContent();
+    content.repaint();
+}
+
+juce::String BteqEditor::headphoneSummary() const {
+    return proc.selectedHeadphone().isNotEmpty() ? proc.selectedHeadphone() : juce::String("None chosen");
+}
+
+juce::String BteqEditor::targetSummary() const {
+    const auto* p = proc.selectedProfile();
+    if (p == nullptr) return "None chosen";
+    if (proc.currentMatch().active) return "Sounding like " + proc.matchedHeadphone();
+    const juce::String from = p->originalPreset ? juce::String(p->source) + "'s own preset" : juce::String(p->sourceLabel());
+    return juce::String(p->target) + " (" + from + ")";
 }
 
 // Sound like another headphone ---------------------------------------------------
@@ -1409,7 +1553,15 @@ void BteqEditor::setUiScale(float scale) {
 }
 
 void BteqEditor::mouseDown(const juce::MouseEvent& e) {
-    if (!e.mods.isPopupMenu()) return;
+    if (!e.mods.isPopupMenu()) {
+        // A click on a box's heading folds it up or opens it.
+        if (e.eventComponent != &content) return;
+        const auto pos = e.getEventRelativeTo(&content).getPosition();
+        if (rHeadphone.withHeight(44).withTrimmedRight(44).contains(pos)) toggleCollapse(1);
+        else if (rTarget.withHeight(44).contains(pos)) toggleCollapse(2);
+        else if (rSummary.contains(pos)) toggleCollapse(0);
+        return;
+    }
     // Leave right-clicks on knobs and text fields to them.
     for (auto* c = e.eventComponent; c != nullptr && c != &content; c = c->getParentComponent())
         if (dynamic_cast<juce::Slider*>(c) != nullptr || dynamic_cast<juce::TextEditor*>(c) != nullptr ||
