@@ -158,8 +158,9 @@ private:
     ApoBridge apo;
     bool apoWanted = false;
     std::atomic<bool> apoRunning { false }; // the standalone's own audio passes through untouched
-    juce::String apoProblem, apoLastText, apoPendingText;
-    juce::uint32 apoPendingSince = 0;
+    juce::String apoProblem, apoLastText;
+    juce::uint32 apoLastWrite = 0;
+    juce::uint32 apoDeviceCheckUntil = 0;
     bool myEqPerTargetFlag = false;
     std::map<juce::String, MyEq> myEqByTarget; // per-target mode, other targets than the selected one
     juce::String myEqKey;                      // the target myEqSettings belongs to in per-target mode

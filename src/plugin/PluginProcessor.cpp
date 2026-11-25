@@ -2,6 +2,8 @@
 #include "PluginEditor.h"
 #include "ApoConfig.h"
 
+void setStandaloneAudioOpen(bool open); // StandaloneAudio.cpp
+
 #include <BinaryData.h>
 
 LibraryHolder::LibraryHolder() {
@@ -462,25 +464,27 @@ void BteqProcessor::updateApo() {
             return;
         }
         apoLastText.clear();
-        apoPendingText.clear();
     } else if (!apoWanted && apo.running()) {
         apo.stop();
     }
+    // While APO applies the EQ, the standalone needs no audio device. Holding
+    // one open (ASIO or a small buffer on the same interface) can make
+    // Windows' own audio stutter, so it is closed, and reopened when APO is off.
+    // Checked for a few seconds after a change, since the app may open its
+    // device just after restoring a session that had APO on.
+    if (apo.running() != apoRunning.load()) apoDeviceCheckUntil = juce::Time::getMillisecondCounter() + 3000;
     apoRunning = apo.running();
+    if ((juce::int32)(apoDeviceCheckUntil - juce::Time::getMillisecondCounter()) > 0) setStandaloneAudioOpen(!apo.running());
     if (!apo.running()) return;
 
-    // Written once the settings have held still for a moment, so a knob drag
-    // doesn't make APO reload its config many times a second.
+    // A click (bypass, a filter switch, a new target) is written straight away.
+    // While a knob is dragged, writes are spaced 200 ms apart so APO doesn't
+    // reload its config many times a second; the final value always follows.
     const auto text = apoConfigText();
     const auto now = juce::Time::getMillisecondCounter();
     if (text == apoLastText) return;
-    if (text != apoPendingText) {
-        apoPendingText = text;
-        apoPendingSince = now;
-        if (apoLastText.isNotEmpty()) return;
-    } else if (now - apoPendingSince < 250) {
-        return;
-    }
+    if (apoLastText.isNotEmpty() && now - apoLastWrite < 200) return;
+    apoLastWrite = now;
     juce::String error;
     if (apo.write(text, error)) {
         apoLastText = text;
