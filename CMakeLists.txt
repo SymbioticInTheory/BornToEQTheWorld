@@ -106,7 +106,8 @@ if(BTEQ_BUILD_PLUGIN)
     src/plugin/PluginEditor.cpp
     src/plugin/AnalyserWindow.cpp
     src/plugin/ApoBridge.cpp
-    src/plugin/StandaloneAudio.cpp)
+    src/plugin/StandaloneAudio.cpp
+    src/plugin/Loopback.cpp)
   target_include_directories(BornToEQTheWorld PRIVATE src)
 
   target_compile_definitions(BornToEQTheWorld PUBLIC

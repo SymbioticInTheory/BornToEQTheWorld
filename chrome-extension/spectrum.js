@@ -21,6 +21,12 @@ let mouse = null;
 const save = () => chrome.storage.local.set({ spectrum: cfg });
 
 // ---------------------------------------------------------------- settings
+// Smoothing steps in octaves, the same as SPAN's (and BEQ's plugin); 0 = off.
+const SMOOTH_STEPS = [[0, 'Off'], [1 / 48, '1/48'], [1 / 24, '1/24'], [1 / 12, '1/12'], [1 / 9, '1/9'], [1 / 6, '1/6'],
+  [1 / 5, '1/5'], [1 / 4, '1/4'], [1 / 3, '1/3'], [1 / 2, '1/2'], [2 / 3, '2/3'], [3 / 4, '3/4'], [1, '1'], [2, '2'], [2.5, '2.5']];
+const smoothIndex = (o) => SMOOTH_STEPS.reduce((best, s, i) => (Math.abs(s[0] - o) < Math.abs(SMOOTH_STEPS[best][0] - o) ? i : best), 0);
+// The dB range bar: the whole span the range can move in.
+const RANGE_BOTTOM = -150, RANGE_TOP = 20;
 // Knobs: name, range, how a value reads, and whether the knob turns on a log scale.
 const KNOBS = [
   { key: 'avgMs', name: 'Average', min: 500, max: 31000, log: true, def: DEFAULTS.avgMs,
@@ -33,12 +39,12 @@ const KNOBS = [
   { key: 'slope', name: 'Slope', min: -3, max: 9, def: DEFAULTS.slope,
     set: (c, v) => { c.slope = Math.round(v * 2) / 2; }, text: (c) => c.slope.toFixed(1) + ' dB/oct',
     tip: 'Tilts the display around 1 kHz, so a balanced mix looks flat (4.5 is common for mastering)' },
-  { key: 'smooth', name: 'Smoothing', min: 0, max: 2, def: DEFAULTS.smooth,
-    set: (c, v) => { c.smooth = Math.round(v * 24) / 24; }, text: (c) => smoothText(c.smooth),
-    tip: 'Averages over this many octaves, so the shape is easier to read' },
-  { key: 'lo', name: 'Range low', min: -150, max: -20, def: DEFAULTS.lo,
+  { key: 'smooth', name: 'Smoothing', min: 0, max: SMOOTH_STEPS.length - 1, def: smoothIndex(DEFAULTS.smooth),
+    get: (c) => smoothIndex(c.smooth), set: (c, v) => { c.smooth = SMOOTH_STEPS[Math.round(v)][0]; }, text: (c) => smoothText(c.smooth),
+    tip: 'Averages over this many octaves, so the shape is easier to read (also in the list on the left)' },
+  { key: 'lo', name: 'Range low', min: -150, max: 10, def: DEFAULTS.lo,
     set: (c, v) => { c.lo = Math.min(Math.round(v), c.hi - 6); }, text: (c) => c.lo + ' dB', tip: 'Level at the bottom of the graph' },
-  { key: 'hi', name: 'Range high', min: -60, max: 20, def: DEFAULTS.hi,
+  { key: 'hi', name: 'Range high', min: -140, max: 20, def: DEFAULTS.hi,
     set: (c, v) => { c.hi = Math.max(Math.round(v), c.lo + 6); }, text: (c) => c.hi + ' dB', tip: 'Level at the top of the graph' },
   { key: 'fLo', name: 'Freq low', min: 10, max: 1000, log: true, def: DEFAULTS.fLo,
     set: (c, v) => { c.fLo = Math.min(Math.round(v), c.fHi / 2); }, text: (c) => hzText(c.fLo), tip: 'Lowest frequency shown' },
@@ -47,11 +53,8 @@ const KNOBS = [
 ];
 const hzText = (f) => (f >= 1000 ? (f / 1000).toFixed(f >= 10000 ? 1 : 2) + ' kHz' : Math.round(f) + ' Hz');
 function smoothText(o) {
-  if (o < 1e-3) return 'Off';
-  for (const den of [1, 2, 3, 6, 12, 24])
-    for (let num = 1; num <= 2 * den; num++)
-      if (Math.abs(o - num / den) < 0.004) return (den === 1 ? num : num + '/' + den) + ' oct';
-  return o.toFixed(2) + ' oct';
+  const i = smoothIndex(o);
+  return i === 0 ? 'Off' : SMOOTH_STEPS[i][1] + ' oct';
 }
 
 // A knob like the mixer's master: drag up or down (Shift: fine), scroll, double-click for the default.
@@ -99,6 +102,8 @@ function drawKnobs() {
     ptr.setAttribute('x2', x); ptr.setAttribute('y2', y);
     k.el.querySelector('.value').textContent = k.text(cfg);
   }
+  $('smooth').value = String(smoothIndex(cfg.smooth));
+  drawRange();
 }
 let saveTimer = null;
 function onKnob() {
@@ -118,7 +123,64 @@ function showSettings() {
   resize();
 }
 
+// ---------------------------------------------------------------- dB range bar (like SPAN's)
+// Drag its ends to zoom in or out, the middle to move it, scroll on it to zoom,
+// double-click for the default.
+function drawRange() {
+  const t = $('rangeThumb'), span = RANGE_TOP - RANGE_BOTTOM;
+  t.style.top = ((RANGE_TOP - cfg.hi) / span) * 100 + '%';
+  t.style.height = ((cfg.hi - cfg.lo) / span) * 100 + '%';
+}
+function setRange(lo, hi) {
+  const span = Math.min(RANGE_TOP - RANGE_BOTTOM, Math.max(6, hi - lo));
+  hi = Math.min(RANGE_TOP, Math.max(RANGE_BOTTOM + span, hi));
+  cfg.hi = Math.round(hi * 2) / 2;
+  cfg.lo = Math.round((hi - span) * 2) / 2;
+  onKnob();
+}
+function bindRange() {
+  const bar = $('range');
+  const dbAt = (clientY) => { const r = bar.getBoundingClientRect(); return RANGE_TOP - ((clientY - r.top) / r.height) * (RANGE_TOP - RANGE_BOTTOM); };
+  const yOf = (db) => { const r = bar.getBoundingClientRect(); return r.top + ((RANGE_TOP - db) / (RANGE_TOP - RANGE_BOTTOM)) * r.height; };
+  let drag = null;
+  const part = (clientY) => {
+    const dHi = Math.abs(clientY - yOf(cfg.hi)), dLo = Math.abs(clientY - yOf(cfg.lo));
+    return dHi < 7 && dHi <= dLo ? 'hi' : dLo < 7 ? 'lo' : 'move';
+  };
+  bar.addEventListener('pointerdown', (e) => {
+    const p = part(e.clientY);
+    if (p === 'move' && (e.clientY < yOf(cfg.hi) || e.clientY > yOf(cfg.lo))) { // outside the thumb: move it there
+      const mid = dbAt(e.clientY), half = (cfg.hi - cfg.lo) / 2;
+      setRange(mid - half, mid + half);
+    }
+    drag = { p, y: e.clientY, lo: cfg.lo, hi: cfg.hi };
+    bar.setPointerCapture(e.pointerId);
+    bar.classList.add('active');
+  });
+  bar.addEventListener('pointermove', (e) => {
+    if (!drag) { bar.style.cursor = part(e.clientY) === 'move' ? 'grab' : 'ns-resize'; return; }
+    const r = bar.getBoundingClientRect();
+    const d = -((e.clientY - drag.y) / r.height) * (RANGE_TOP - RANGE_BOTTOM) * (e.shiftKey ? 0.25 : 1);
+    if (drag.p === 'hi') setRange(drag.lo, Math.max(drag.lo + 6, drag.hi + d));
+    else if (drag.p === 'lo') setRange(Math.min(drag.hi - 6, drag.lo + d), drag.hi);
+    else setRange(drag.lo + d, drag.hi + d);
+  });
+  const end = () => { drag = null; bar.classList.remove('active'); };
+  bar.addEventListener('pointerup', end);
+  bar.addEventListener('pointercancel', end);
+  bar.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const mid = (cfg.lo + cfg.hi) / 2, half = ((cfg.hi - cfg.lo) / 2) * (e.deltaY < 0 ? 1 / 1.15 : 1.15);
+    setRange(mid - half, mid + half);
+  }, { passive: false });
+  bar.addEventListener('dblclick', () => setRange(DEFAULTS.lo, DEFAULTS.hi));
+}
+
 function bindSettings() {
+  const sm = $('smooth');
+  SMOOTH_STEPS.forEach(([, name], i) => sm.add(new Option(i === 0 ? 'Off' : name + ' oct', String(i))));
+  sm.addEventListener('change', () => { cfg.smooth = SMOOTH_STEPS[Number(sm.value)][0]; onKnob(); });
+  bindRange();
   for (const k of ['where', 'view', 'block']) {
     $(k).addEventListener('change', () => {
       cfg[k] = k === 'block' ? Number($(k).value) : $(k).value;

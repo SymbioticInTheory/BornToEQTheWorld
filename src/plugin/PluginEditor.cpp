@@ -328,11 +328,13 @@ ResponseGraph::ResponseGraph(BteqProcessor& p, const Theme& t) : proc(p), theme(
     addChildComponent(scopeButton);
     analyserButton.getProperties().set("kind", "pill");
     analyserButton.setClickingTogglesState(true);
-    analyserButton.setTooltip("Show the input's spectrum behind the curve (before any correction). Runs only while this is on and the window is open.");
+    analyserButton.setTooltip(proc.standaloneUi
+        ? "Show the spectrum of what Windows is playing behind the curve (before BEQ's EQ, unless the pop-out says otherwise). Runs only while this is on and the window is open."
+        : "Show the input's spectrum behind the curve (before any correction). Runs only while this is on and the window is open.");
     analyserButton.onClick = [this] { setAnalyser(analyserButton.getToggleState()); };
     addAndMakeVisible(analyserButton);
     popOutButton.getProperties().set("kind", "pill");
-    popOutButton.setTooltip("Open the spectrum in its own window, with all its settings");
+    popOutButton.setTooltip("Pop out: open the spectrum in its own window, with all its settings and My EQ to tune over it");
     popOutButton.onClick = [this] { if (onPopOut) onPopOut(); };
     addAndMakeVisible(popOutButton);
     refreshMyEqButton();
@@ -352,6 +354,7 @@ void ResponseGraph::setAnalyser(bool on) {
     if (on && overlay == nullptr) {
         proc.spectrumTap.addViewer();
         overlay = std::make_unique<bteq::spectrum::Analyser>();
+        connectAnalyser(*overlay, proc);
         overlayVersion = -1;
         startTimerHz(30);
     } else if (!on && overlay != nullptr) {
@@ -373,7 +376,7 @@ void ResponseGraph::timerCallback() {
         if (restart) overlay->reset();
         proc.spectrumTap.where = s.where;
     }
-    overlay->process(proc.spectrumTap, proc.currentSampleRate());
+    feedAnalyser(*overlay, proc, overlayGeneration);
     repaint(plotArea().toNearestInt());
 }
 
@@ -393,8 +396,8 @@ void ResponseGraph::setAdvanced(bool on) {
 }
 
 void ResponseGraph::resized() {
-    analyserButton.setBounds(34, 2, 84, 24);
-    popOutButton.setBounds(34 + 84 + 6, 2, 84, 24);
+    analyserButton.setBounds(34, 2, 80, 24);
+    popOutButton.setBounds(analyserButton.getRight() + 4, 2, 30, 24);
     advancedButton.setBounds(getWidth() - 96, 2, 96, 24);
     myEqButton.setBounds(getWidth() - 96 - 8 - 76, 2, 76, 24);
     scopeButton.setBounds(myEqButton.getX() - 8 - 140, 2, 140, 24);
@@ -655,7 +658,8 @@ void ResponseGraph::paintAdvanced(juce::Graphics& g, const bteq::HeadphoneProfil
                            { Measured, "Measured", measuredColour, hasMeasured },
                            { Corrected, "Corrected", curveColour, hasMeasured },
                            { Eq, "EQ", eqColour, true } };
-    float x = plotArea().getX();
+    float x = (float)popOutButton.getRight() + 14.0f; // after the analyser's buttons
+    const float rightLimit = (float)(scopeButton.isVisible() ? scopeButton.getX() : myEqButton.getX()) - 8.0f;
     g.setFont(theme.bodyFont(14.0f, true));
     for (const auto& it : items) {
         const float w = 30.0f + juce::GlyphArrangement::getStringWidth(g.getCurrentFont(), it.name);
@@ -676,7 +680,7 @@ void ResponseGraph::paintAdvanced(juce::Graphics& g, const bteq::HeadphoneProfil
     } else if (!hasMeasured) {
         g.setColour(Theme::muted);
         g.setFont(theme.bodyFont(13.0f));
-        g.drawText("No measurement from this source", juce::Rectangle<float>(x, 2, getWidth() - x - 104, 24),
+        g.drawText("No measurement from this source", juce::Rectangle<float>(x, 2, juce::jmax(0.0f, rightLimit - x), 24),
                    juce::Justification::centredLeft, true);
     }
 }

@@ -3,6 +3,7 @@
 #include "ApoConfig.h"
 
 void setStandaloneAudioOpen(bool open); // StandaloneAudio.cpp
+bool standaloneAudioHasInput();          // StandaloneAudio.cpp
 
 #include <BinaryData.h>
 
@@ -701,6 +702,62 @@ void BteqProcessor::timerCallback() {
         customs->save();
     }
     updateApo();
+    updateAnalyserSource();
+}
+
+// Standalone: while an analyser view is open and BEQ's own audio device has no
+// input (it is closed while Equalizer APO does the EQ), listen to what Windows
+// plays instead. Stops when the last view closes.
+void BteqProcessor::updateAnalyserSource() {
+    if (!standaloneUi) return;
+    const bool wanted = spectrumTap.wanted();
+    const auto now = juce::Time::getMillisecondCounter();
+    if (wanted && now - loopbackCheck < 500 && loopback.running()) return; // the device check twice a second is plenty
+    loopbackCheck = now;
+    const bool listen = wanted && !standaloneAudioHasInput();
+    if (listen && !loopback.running()) loopback.start(spectrumTap);
+    else if (!listen && loopback.running()) loopback.stop();
+}
+
+std::vector<double> BteqProcessor::appliedResponseDb(const std::vector<double>& freqs) const {
+    std::vector<double> out(freqs.size(), 0.0);
+    const juce::ScopedLock sl(buildLock);
+    if (bypassParam->load() > 0.5f) return out;
+    const double k = juce::jlimit(0.0, 1.0, (double)amountParam->load() / 100.0);
+    double preamp = trimParam->load();
+    std::vector<bteq::BiquadCoeffs> coeffs;
+    constexpr double fs = 48000.0;
+    if (const auto* p = selectedProfile()) {
+        if (graphicModeActive()) {
+            const double pre = preampSettingDb();
+            auto gains = graphicShapeDb();
+            for (auto& g : gains) g = (g + pre) * k;
+            const auto& gf = graphicFrequencies();
+            for (size_t i = 0; i < freqs.size(); ++i) out[i] += bteq::graphicGainAt(gf, gains, freqs[i]);
+        } else {
+            juce::ignoreUnused(p);
+            const auto preset = effectiveParametric();
+            preamp += preset.preampDb * k;
+            for (const auto& f : preset.filters)
+                if (f.enabled) coeffs.push_back(bteq::BiquadCoeffs::make(f.type, f.fc, f.gainDb * k, f.q, fs));
+        }
+    }
+    if (myEqSettings.on) {
+        bool any = false;
+        for (const auto& b : myEqSettings.bands)
+            if (b.enabled && std::abs(b.gainDb) > 0.01) {
+                any = true;
+                coeffs.push_back(bteq::BiquadCoeffs::make(b.type, b.fc, b.gainDb, b.q, fs));
+            }
+        if (any || std::abs(myEqSettings.gainDb) > 0.001)
+            preamp += myEqSettings.autoGain ? myEqRecommended.load() : myEqSettings.gainDb;
+    }
+    for (size_t i = 0; i < freqs.size(); ++i) {
+        double db = preamp;
+        for (const auto& c : coeffs) db += c.magnitudeDb(freqs[i], fs);
+        out[i] += db;
+    }
+    return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -710,6 +767,7 @@ void BteqProcessor::setApoOutput(bool on) {
     apoWanted = on;
     apoProblem.clear();
     updateApo();
+    updateAnalyserSource();
 }
 
 void BteqProcessor::updateApo() {
@@ -1005,7 +1063,7 @@ void BteqProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     const bool bypass = bypassParam->load() > 0.5f || apoRunning.load();
     const int chans = juce::jmin(buffer.getNumChannels(), 2);
     // The analyser, when one is showing: the input before any correction (or the output, below).
-    const bool tapping = spectrumTap.wanted();
+    const bool tapping = spectrumTap.wanted() && !spectrumTap.external.load(); // the loopback feeds it instead
     if (tapping && spectrumTap.where.load() == 0) spectrumTap.write(buffer.getArrayOfReadPointers(), chans, n);
     bool usedGraphic = false, usedEq = false, usedExtra = false;
     if (!bypass) {

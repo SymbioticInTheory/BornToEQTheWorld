@@ -22,3 +22,13 @@ void setStandaloneAudioOpen(bool open) {
     juce::ignoreUnused(open);
 #endif
 }
+
+// Whether the standalone's own audio device is open with an input switched on.
+bool standaloneAudioHasInput() {
+#if JucePlugin_Build_Standalone
+    if (auto* holder = juce::StandalonePluginHolder::getInstance())
+        if (auto* device = holder->deviceManager.getCurrentAudioDevice())
+            return device->getActiveInputChannels().countNumberOfSetBits() > 0;
+#endif
+    return false;
+}

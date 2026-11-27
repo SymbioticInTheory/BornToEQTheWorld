@@ -10,6 +10,7 @@
 #include "dsp/HeadphoneLibrary.h"
 #include "ApoBridge.h"
 #include "Spectrum.h"
+#include "Loopback.h"
 
 #include <array>
 #include <atomic>
@@ -174,6 +175,17 @@ public:
     // The analyser's input: the audio thread copies samples only while a view is registered.
     bteq::spectrum::Tap spectrumTap;
     double currentSampleRate() const { return sampleRate; }
+    // The sample rate of what the tap holds (the loopback's, when it is listening).
+    double analyserRate() const { return spectrumTap.external.load() && spectrumTap.rate.load() > 0 ? spectrumTap.rate.load() : sampleRate; }
+    // Standalone: the analyser hears what Windows plays (BEQ's own audio device
+    // has no input while Equalizer APO does the EQ).
+    bool analyserHearsSystem() const { return spectrumTap.external.load(); }
+    // ...and Equalizer APO is applying BEQ's EQ to it, so "before correction" is
+    // that sound with BEQ's response taken back out.
+    bool analyserUndoesEq() const { return spectrumTap.external.load() && apoRunning.load(); }
+    // What BEQ's EQ does at each frequency, in dB, all of it: the same as
+    // apoConfigText() (correction, My EQ, preamp, trim; 0 when bypassed).
+    std::vector<double> appliedResponseDb(const std::vector<double>& freqs) const;
     // Analyser settings, shared by every BEQ (settings.xml "analyser").
     // Message thread only; analyserVersion() changes whenever they do, so open views can follow.
     static const bteq::spectrum::Settings& analyserSettings();
@@ -196,6 +208,7 @@ private:
     static void writeMyEq(juce::ValueTree& t, const MyEq& m);
     void syncMyEq(); // per-target mode: swap in the My EQ of the selected target
     void updateApo();
+    void updateAnalyserSource();
     ApoBridge apo;
     bool apoWanted = false;
     std::atomic<bool> apoRunning { false }; // the standalone's own audio passes through untouched
@@ -300,6 +313,9 @@ private:
     double builtAmount = -1, builtRate = 0;
     bool builtGraphic = false;
     double preampDb = 0;
+
+    SystemLoopback loopback; // declared after spectrumTap, so it stops before the tap goes
+    juce::uint32 loopbackCheck = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BteqProcessor)
     JUCE_DECLARE_WEAK_REFERENCEABLE(BteqProcessor)

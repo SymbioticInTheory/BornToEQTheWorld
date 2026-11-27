@@ -2,8 +2,14 @@
 body.spectrum { display: flex; flex-direction: column; height: 100vh; min-height: 0; overflow: hidden; }
 .sub .hint { color: var(--soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .readout { margin-left: auto; font: 700 13px "Barlow Condensed", sans-serif; letter-spacing: 0.06em; color: var(--text); white-space: nowrap; }
-.plot { flex: 1; min-height: 120px; position: relative; padding: 6px; }
-#plot { width: 100%; height: 100%; display: block; cursor: crosshair; }
+.plot { flex: 1; min-height: 120px; position: relative; padding: 6px; display: flex; gap: 8px; }
+#plot { flex: 1; min-width: 0; height: 100%; display: block; cursor: crosshair; }
+.range { flex: none; width: 10px; position: relative; border-radius: 5px; background: rgba(255, 255, 255, 0.08); touch-action: none; cursor: grab; }
+.range-thumb {
+  position: absolute; left: 0; right: 0; min-height: 8px; border-radius: 5px; pointer-events: none;
+  background: var(--accent); opacity: 0.55; box-shadow: inset 0 3px 0 -1px rgba(255,255,255,0.55), inset 0 -3px 0 -1px rgba(255,255,255,0.55);
+}
+.range:hover .range-thumb, .range.active .range-thumb { opacity: 0.85; }
 .idle { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--soft); padding: 20px; text-align: center; }
 .settings { display: flex; gap: 14px; align-items: stretch; }
 .picks { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 8px; flex: 0 0 250px; align-content: start; }
@@ -12,7 +18,7 @@ body.spectrum { display: flex; flex-direction: column; height: 100vh; min-height
   font: 700 11px "Barlow Condensed", sans-serif; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted);
 }
 .picks select { flex: none; height: 26px; font: 400 12px Barlow, sans-serif; letter-spacing: 0; text-transform: none; }
-.pick-buttons { display: flex; gap: 6px; align-items: end; }
+.pick-buttons { display: flex; gap: 6px; align-items: end; grid-column: span 2; }
 .pick-buttons .btn { height: 26px; padding: 0 10px; flex: 1; }
 .tune { flex-direction: row; align-items: center; gap: 6px; }
 .tune select { flex: none; width: 190px; height: 24px; font: 400 12px Barlow, sans-serif; letter-spacing: 0; text-transform: none; }
