@@ -1302,6 +1302,10 @@ BteqEditor::BteqEditor(BteqProcessor& p)
 }
 
 BteqEditor::~BteqEditor() {
+    // Low memory mode: free the headphone library once this window has gone.
+    juce::MessageManager::callAsync([w = juce::WeakReference<BteqProcessor>(&proc)] {
+        if (auto* p = w.get()) p->releaseLibraryIfUnused();
+    });
     if (titleWindow != nullptr) titleWindow->setLookAndFeel(nullptr);
     setLookAndFeel(nullptr);
 }
@@ -1765,7 +1769,7 @@ void BteqEditor::showScaleMenu(bool withSizes) {
     static constexpr int kLowMemory = 1020;
     if (withSizes) {
         menu.addSectionHeader("Memory");
-        menu.addItem(kLowMemory, "Low memory mode (no background picture)", true, Theme::lowMemory);
+        menu.addItem(kLowMemory, "Low memory mode (no background picture; headphone list freed while closed)", true, Theme::lowMemory);
         menu.addSectionHeader("Background");
     }
     menu.addItem(kForest, "Forest", true, !Theme::hasImage);
@@ -1797,6 +1801,7 @@ juce::File BteqEditor::backgroundFile() { return settingsFile().getSiblingFile("
 // Uses your image if there is one (picking the colours from it), else the forest.
 void BteqEditor::loadBackground() {
     if (auto xml = juce::XmlDocument::parse(settingsFile())) Theme::lowMemory = xml->getBoolAttribute("lowMemory", false);
+    BteqProcessor::setLowMemoryMode(Theme::lowMemory); // another BEQ may have changed it
     juce::Image img;
     if (backgroundFile().existsAsFile()) img = juce::ImageFileFormat::loadFrom(backgroundFile());
     Theme::hasImage = img.isValid();
@@ -1894,6 +1899,7 @@ void BteqEditor::setLowMemory(bool on) {
     auto xml = juce::XmlDocument::parse(settingsFile());
     if (xml == nullptr) xml = std::make_unique<juce::XmlElement>("SETTINGS");
     xml->setAttribute("lowMemory", on);
+    BteqProcessor::setLowMemoryMode(on); // the library is freed whenever no BEQ window is open
     settingsFile().getParentDirectory().createDirectory();
     xml->writeTo(settingsFile());
     loadBackground();
