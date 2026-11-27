@@ -1,0 +1,150 @@
+@font-face { font-family: Barlow; src: url(assets/fonts/Barlow-Regular.ttf); font-weight: 400; }
+@font-face { font-family: Barlow; src: url(assets/fonts/Barlow-SemiBold.ttf); font-weight: 600; }
+@font-face { font-family: "Barlow Condensed"; src: url(assets/fonts/BarlowCondensed-SemiBold.ttf); font-weight: 600; }
+@font-face { font-family: "Barlow Condensed"; src: url(assets/fonts/BarlowCondensed-Bold.ttf); font-weight: 700; }
+
+/* BEQ's colours. --accent is set from the chosen colour dot. */
+:root {
+  --accent: #C42B2B;
+  --bg: #0B0C0D;
+  --panel: rgba(12, 13, 15, 0.74);
+  --border: rgba(255, 255, 255, 0.09);
+  --field: rgba(6, 7, 8, 0.7);
+  --text: #E8E4DC;
+  --bright: #F2EEE6;
+  --muted: #A6A49F;
+  --soft: #BEBBB5;
+  --grid: rgba(255, 255, 255, 0.08);
+}
+
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body {
+  width: 440px;
+  margin: 0;
+  padding: 12px 14px 10px;
+  color: var(--text);
+  font: 400 13px Barlow, system-ui, sans-serif;
+  background:
+    radial-gradient(ellipse at 60% 25%, rgba(10, 11, 12, 0.25), rgba(10, 11, 12, 0.62) 55%, rgba(8, 9, 10, 0.9) 100%),
+    url(assets/forest.jpg) center / cover no-repeat,
+    var(--bg);
+  user-select: none;
+}
+
+.label {
+  font: 700 12px "Barlow Condensed", sans-serif;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.value { font: 700 13px "Barlow Condensed", sans-serif; letter-spacing: 0.08em; color: var(--text); }
+
+header { display: flex; align-items: center; justify-content: space-between; height: 44px; }
+#title { height: 40px; margin-left: -6px; }
+.head-buttons { display: flex; gap: 6px; }
+/* Opened inside the mixer window rather than as the toolbar popup. */
+body.window { width: auto; min-height: 100vh; }
+
+.sub { display: flex; gap: 10px; align-items: baseline; margin: 2px 0 8px; min-width: 0; }
+#tabName { color: var(--soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.graph { padding: 6px; }
+#curve { width: 100%; height: 124px; display: block; }
+
+.bands { display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; }
+.band { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.band .value { font-size: 12px; min-height: 15px; }
+.band .label { font-size: 11px; letter-spacing: 0.06em; }
+.band input {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 22px;
+  height: 120px;
+}
+
+input[type=range] { appearance: none; background: transparent; cursor: ns-resize; }
+.level input[type=range] { cursor: ew-resize; }
+input[type=range]::-webkit-slider-runnable-track {
+  background: rgba(255, 255, 255, 0.10);
+  border-radius: 2px;
+  width: 4px;
+  height: 100%;
+}
+.level input[type=range]::-webkit-slider-runnable-track { height: 4px; width: 100%; }
+input[type=range]::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--bright);
+  border: 3px solid var(--accent);
+  margin: 0 -5px;
+}
+.level input[type=range]::-webkit-slider-thumb { margin: -5px 0 0; }
+input[type=range]:focus { outline: none; }
+
+.level { display: flex; align-items: center; gap: 10px; }
+.level input { flex: 1; height: 18px; }
+#levelValue { width: 58px; text-align: right; }
+
+.presets { display: flex; gap: 8px; }
+select, .btn {
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: var(--field);
+  color: var(--text);
+  font: 400 13px Barlow, sans-serif;
+}
+select { flex: 1; padding: 0 8px; }
+select option, select optgroup { background: #141517; color: var(--text); }
+.btn { padding: 0 12px; cursor: pointer; font: 700 12px "Barlow Condensed", sans-serif; letter-spacing: 0.12em; text-transform: uppercase; }
+.btn:hover { background: rgba(232, 228, 220, 0.12); }
+.btn:disabled { opacity: 0.35; cursor: default; }
+
+.pill {
+  height: 30px;
+  padding: 0 16px;
+  border-radius: 15px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: transparent;
+  color: var(--soft);
+  font: 700 12px "Barlow Condensed", sans-serif;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.pill.small { height: 24px; padding: 0 10px; font-size: 11px; }
+.pill:hover { background: rgba(232, 228, 220, 0.12); }
+.pill.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--bright);
+}
+
+.status { min-height: 16px; color: #FFB5A6; font-size: 12px; margin: -2px 2px 4px; }
+
+footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 24px; }
+.swatches { display: flex; gap: 6px; }
+.swatch { width: 18px; height: 18px; border-radius: 50%; border: 1px solid transparent; padding: 3px; background: transparent; cursor: pointer; }
+.swatch span { display: block; width: 100%; height: 100%; border-radius: 50%; }
+.swatch.on { border-color: var(--soft); }
+/* The Standard Model, small and faint in the corner. */
+.lagrangian {
+  flex: 0 1 260px;
+  height: 13px;
+  background: var(--accent);
+  opacity: 0.45;
+  -webkit-mask: url(assets/lagrangian.png) right center / contain no-repeat;
+  mask: url(assets/lagrangian.png) right center / contain no-repeat;
+}
+[hidden] { display: none !important; }
+body.window { overflow-x: hidden; }

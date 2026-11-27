@@ -1,0 +1,30 @@
+/* The mixer window: one strip per tab. Builds on popup.css. */
+body.window { display: flex; flex-direction: column; }
+#rows { flex: 1; }
+.sub .hint { color: var(--soft); }
+
+.strip { padding: 8px 10px; }
+.strip .top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.strip .icon { width: 16px; height: 16px; flex: none; border-radius: 3px; }
+.strip .name {
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: var(--text); cursor: pointer;
+}
+.strip .name:hover { color: var(--bright); text-decoration: underline; text-decoration-color: rgba(255,255,255,0.3); }
+.strip .pill { height: 24px; padding: 0 10px; font-size: 11px; flex: none; }
+.strip.off .name { color: var(--soft); }
+
+.strip .controls { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.strip .controls input[type=range] { flex: 1; height: 18px; cursor: ew-resize; }
+.strip .controls input[type=range]::-webkit-slider-runnable-track { height: 4px; width: 100%; }
+.strip .controls input[type=range]::-webkit-slider-thumb { margin: -5px 0 0; }
+.strip .controls .value { width: 54px; text-align: right; }
+.strip .controls select { flex: 0 0 128px; height: 26px; font-size: 12px; }
+.strip.muted .controls input[type=range] { opacity: 0.4; }
+
+.strip .note { margin-top: 6px; font-size: 12px; color: var(--muted); }
+.strip .note.warn { color: #FFB5A6; }
+
+.empty { color: var(--soft); text-align: center; padding: 18px 12px; }
+footer { margin-top: 4px; }

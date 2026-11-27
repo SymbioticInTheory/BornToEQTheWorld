@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BEQ Tab EQ</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <img id="title" src="assets/title0.png" alt="Born To EQ The World">
+    <div class="head-buttons">
+      <button id="mixer" class="pill" title="Open the mixer: every tab playing sound, in one window">Mixer</button>
+      <button id="power" class="pill" title="EQ this tab on or off">Off</button>
+    </div>
+  </header>
+  <div class="sub"><span class="label">Tab EQ</span><span id="tabName"></span></div>
+
+  <section class="panel graph">
+    <canvas id="curve" width="816" height="248"></canvas>
+  </section>
+
+  <section class="panel">
+    <div id="bands" class="bands"></div>
+  </section>
+
+  <section class="panel level">
+    <span class="label">Level</span>
+    <input id="level" type="range" min="-40" max="12" step="0.5" value="0">
+    <span id="levelValue" class="value">0.0 dB</span>
+    <button id="headroom" class="pill small" title="Lowers the tab by the EQ's highest boost, so boosts can't clip">Headroom</button>
+  </section>
+
+  <section class="panel presets">
+    <select id="preset"></select>
+    <button id="save" class="btn" title="Save these settings as your own profile">Save</button>
+    <button id="delete" class="btn" title="Delete this saved profile">Delete</button>
+  </section>
+
+  <div id="status" class="status"></div>
+
+  <footer>
+    <div id="swatches" class="swatches"></div>
+    <div class="lagrangian" title="The Standard Model"></div>
+  </footer>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
