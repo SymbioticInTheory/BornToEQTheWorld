@@ -10,6 +10,7 @@
 
 #include <array>
 #include <atomic>
+#include <list>
 #include <map>
 #include <memory>
 
@@ -27,6 +28,18 @@ struct CurvesHolder {
     CurvesHolder();
     bteq::CurveLibrary curves;
     bool loaded = false;
+};
+
+// Presets you make yourself, kept for every headphone in
+// %APPDATA%/Born To EQ The World/custom-presets.xml and shared by every
+// instance. Message thread only. A std::list, so profile pointers stay valid.
+struct CustomPresetStore {
+    static inline const std::string kSource = "Custom";
+    CustomPresetStore(); // loads the file
+    std::list<bteq::HeadphoneProfile> presets;
+    bteq::HeadphoneProfile* find(const std::string& headphone, const std::string& name);
+    void save() const;
+    static juce::File file();
 };
 
 class BteqProcessor : public juce::AudioProcessor, private juce::Timer {
@@ -63,6 +76,14 @@ public:
     juce::String selectedHeadphone() const { return headphoneName; }
     int selectedProfileIndex() const { return profileIndex; }
     const bteq::HeadphoneProfile* selectedProfile() const;
+    // The selected headphone's profiles: the library's, then your own presets.
+    std::vector<const bteq::HeadphoneProfile*> profilesFor(const juce::String& headphone) const;
+    static bool isCustom(const bteq::HeadphoneProfile* p) { return p != nullptr && p->source == CustomPresetStore::kSource; }
+    bool selectedIsCustom() const;
+    // Your own presets for the selected headphone. Editing one changes the preset itself.
+    juce::String addCustomPreset(const juce::String& name, const bteq::ParametricPreset& preset); // selects it; returns the name used
+    void renameCustomPreset(int profileIndex, const juce::String& name);
+    void deleteCustomPreset(int profileIndex);
     bool graphicAvailable() const;
     bool graphicModeActive() const;
     double amount() const; // 0..1, 0 when bypassed
@@ -171,6 +192,12 @@ private:
     std::atomic<bool> myEqRunning { false };
 
     juce::SharedResourcePointer<LibraryHolder> holder;
+    juce::SharedResourcePointer<CustomPresetStore> customs;
+    bool customsDirty = false;
+    bteq::HeadphoneProfile* selectedCustom(); // the selected profile if it is one of your presets
+    juce::String uniqueCustomName(const juce::String& wanted, const bteq::HeadphoneProfile* except) const;
+    void writeCustom(juce::ValueTree& t) const;  // the selected custom preset, so a session or saved profile carries it
+    void readCustom(const juce::ValueTree& t);   // adds it to your presets if it isn't there (another computer)
     juce::CriticalSection buildLock; // selection + engine building
 
     juce::String headphoneName;

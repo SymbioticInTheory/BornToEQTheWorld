@@ -69,6 +69,7 @@ if(BTEQ_BUILD_PLUGIN)
       ${BTEQ_LIBRARY_GZ}
       ${BTEQ_CURVES_GZ}
       resources/forest.png
+      resources/lagrangian.png
       resources/fonts/PirataOne-Regular.ttf
       resources/fonts/BarlowCondensed-SemiBold.ttf
       resources/fonts/BarlowCondensed-Bold.ttf

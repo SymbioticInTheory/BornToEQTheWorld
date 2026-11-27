@@ -53,6 +53,22 @@ private:
     const Theme& theme;
 };
 
+// The standalone window's title bar: black, with the Standard Model
+// Lagrangian drawn in the accent colour.
+class TitleBarLookAndFeel : public BteqLookAndFeel {
+public:
+    explicit TitleBarLookAndFeel(const Theme& t);
+    void drawDocumentWindowTitleBar(juce::DocumentWindow&, juce::Graphics&, int w, int h, int titleSpaceX, int titleSpaceW,
+                                    const juce::Image* icon, bool drawTitleTextOnLeft) override;
+    // The window's Options button: a small outlined pill that fits the bar.
+    void drawButtonBackground(juce::Graphics&, juce::Button&, const juce::Colour&, bool over, bool down) override;
+    void drawButtonText(juce::Graphics&, juce::TextButton&, bool over, bool down) override;
+
+private:
+    juce::Image formula, scaled; // white on transparent, tinted when drawn
+    const Theme& font;
+};
+
 // The response curve. In parametric mode the numbered points can be dragged
 // (frequency and gain), and scrolling over a point changes its Q.
 class ResponseGraph : public juce::Component {
@@ -66,6 +82,7 @@ public:
     void mouseDrag(const juce::MouseEvent&) override;
     void mouseUp(const juce::MouseEvent&) override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+    void mouseDoubleClick(const juce::MouseEvent&) override; // on a point: switch that filter on or off
     void refreshMyEqButton();
     juce::Colour accent;
     std::function<void()> onMyEqToggled;
@@ -108,7 +125,41 @@ public:
     }
 };
 
-// Filter cards. Each value is a label you can click and type into.
+// A value on a filter card: drag up or down to change it, or click to type.
+class DragLabel : public juce::Label {
+public:
+    std::function<void()> onDragStart;
+    std::function<void(int pixelsUp, bool fine)> onDrag; // movement since the last call; Shift for fine steps
+    void mouseDown(const juce::MouseEvent& e) override {
+        dragging = false;
+        lastY = e.getPosition().y;
+        juce::Label::mouseDown(e);
+    }
+    void mouseDrag(const juce::MouseEvent& e) override {
+        if (!isEditableOnSingleClick()) return;
+        if (!dragging && std::abs(e.getDistanceFromDragStartY()) < 3) return;
+        if (!dragging) {
+            dragging = true;
+            if (onDragStart) onDragStart();
+        }
+        const int y = e.getPosition().y;
+        if (onDrag && y != lastY) onDrag(lastY - y, e.mods.isShiftDown());
+        lastY = y;
+    }
+    void mouseUp(const juce::MouseEvent& e) override {
+        if (dragging) {
+            dragging = false;
+            return; // a drag, not a click: don't open the text editor
+        }
+        juce::Label::mouseUp(e);
+    }
+
+private:
+    bool dragging = false;
+    int lastY = 0;
+};
+
+// Filter cards. Each value can be dragged up or down, or clicked to type into.
 class FiltersPanel : public juce::Component {
 public:
     static constexpr int maxCards = 10;
@@ -129,7 +180,9 @@ private:
     void commit(int card, Field field, const juce::String& text);
     BteqProcessor& proc;
     const Theme& theme;
-    std::array<std::array<juce::Label, numFields>, maxCards> values;
+    std::array<std::array<DragLabel, numFields>, maxCards> values;
+    void dragValue(int card, Field field, int pixelsUp, bool fine);
+    double dragPosition = 0; // the dragged value before rounding (log2 for frequency and Q)
 };
 
 class BteqEditor : public juce::AudioProcessorEditor, private juce::Timer {
@@ -156,7 +209,12 @@ private:
     void refreshHeadphones();
     void refreshTargets();
     void showMatchChooser(juce::Rectangle<int> rowInList);
-    static constexpr int kMatchRow = -2; // target list row for "sound like another headphone"
+    static constexpr int kMatchRow = -2;     // target list row for "sound like another headphone"
+    static constexpr int kNewPresetRow = -3; // target list row for "+ New preset"
+    void showNewPresetMenu();
+    void showCustomPresetMenu(int profileIndex);
+    void newPreset(const bteq::ParametricPreset& preset, const juce::String& suggestedName);
+    std::unique_ptr<juce::FileChooser> fileChooser;
     void setAccent(int index);
     void setMode(bool graphic);
     void refreshEditing();
@@ -192,6 +250,9 @@ private:
     BteqProcessor& proc;
     juce::SharedResourcePointer<Theme> theme;
     BteqLookAndFeel lnf;
+    TitleBarLookAndFeel titleLnf { *theme };
+    juce::Component::SafePointer<juce::DocumentWindow> titleWindow; // standalone only
+    void styleTitleBar();
     juce::Image background;
     juce::Image titleImage; // the Death-style title, redrawn when the colour changes
     juce::Rectangle<float> titleArea;
