@@ -84,30 +84,39 @@ function dropAnalysers(t) {
   t.analysers = null; t.bins = null;
 }
 
-// The spectrum window: everything BEQ plays, raw dB per FFT bin, either before any EQ
-// (every tab's own sound, summed) or after the master. Made when the window first asks
-// and removed a second after it stops asking.
-let masterAnalyser = null, masterBins = null, masterTimer = null, masterWhere = null, preMix = null;
+// The spectrum window: raw dB per FFT bin, for one tab (before or after its own EQ) or
+// for everything BEQ plays (every tab's own sound summed, or after the master). Made
+// when the window first asks and removed a second after it stops asking.
+let masterAnalyser = null, masterBins = null, masterTimer = null, masterWhere = null, masterTab = null, preMix = null;
 function connectPre(t) { if (preMix) t.source.connect(preMix); }
+const tabPoint = (t, where) => (where === 'pre' ? t.source : t.chain.output);
 function unhookAnalyser() {
   if (!masterAnalyser) return;
-  if (masterWhere === 'pre') {
+  if (masterTab != null) {
+    const t = tabs.get(masterTab);
+    if (t) { try { tabPoint(t, masterWhere).disconnect(masterAnalyser); } catch (_) {} }
+  } else if (masterWhere === 'pre') {
     for (const t of tabs.values()) { try { t.source.disconnect(preMix); } catch (_) {} }
     try { preMix.disconnect(); } catch (_) {}
     preMix = null;
   } else {
     try { master.disconnect(masterAnalyser); } catch (_) {}
   }
-  masterAnalyser = null; masterBins = null; masterWhere = null;
+  masterAnalyser = null; masterBins = null; masterWhere = null; masterTab = null;
 }
-function masterSpectrum(fftSize, where) {
+function masterSpectrum(fftSize, where, tabId) {
   if (!ctx || !master) return null;
-  if (masterAnalyser && masterWhere !== where) unhookAnalyser();
+  const tab = tabId != null ? tabs.get(tabId) : null;
+  if (tabId != null && !tab) { unhookAnalyser(); return { rate: ctx.sampleRate, db: null, playing: 0 }; } // that tab stopped
+  if (masterAnalyser && (masterWhere !== where || masterTab !== (tab ? tabId : null))) unhookAnalyser();
   if (!masterAnalyser) {
     masterAnalyser = ctx.createAnalyser();
     masterAnalyser.smoothingTimeConstant = 0; // the window does its own averaging
     masterWhere = where;
-    if (where === 'pre') {
+    masterTab = tab ? tabId : null;
+    if (tab) {
+      tabPoint(tab, where).connect(masterAnalyser);
+    } else if (where === 'pre') {
       preMix = ctx.createGain(); // only feeds the analyser, never the speakers
       preMix.connect(masterAnalyser);
       for (const t of tabs.values()) connectPre(t);
@@ -122,12 +131,13 @@ function masterSpectrum(fftSize, where) {
   masterAnalyser.getFloatFrequencyData(masterBins);
   const out = new Array(masterBins.length);
   for (let i = 0; i < out.length; i++) out[i] = masterBins[i] < -200 ? -200 : Math.round(masterBins[i] * 100) / 100;
-  return { rate: ctx.sampleRate, db: out, playing: tabs.size };
+  return { rate: ctx.sampleRate, db: out, playing: tab ? 1 : tabs.size };
 }
 
 function stop(tabId) {
   const t = tabs.get(tabId);
   if (!t) return;
+  if (masterTab === tabId) unhookAnalyser();
   dropAnalysers(t);
   t.source.disconnect();
   t.chain.output.disconnect();
@@ -157,7 +167,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   }
   if (msg.type === 'masterSpectrum') {
     const n = [2048, 4096, 8192, 16384, 32768].includes(msg.fftSize) ? msg.fftSize : 8192;
-    reply(masterSpectrum(n, msg.where === 'post' ? 'post' : 'pre'));
+    reply(masterSpectrum(n, msg.where === 'post' ? 'post' : 'pre', typeof msg.tabId === 'number' ? msg.tabId : null));
     return false;
   }
   if (msg.type === 'spectrum') {
