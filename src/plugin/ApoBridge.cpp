@@ -30,6 +30,21 @@ bool ApoBridge::replaceFile(const juce::File& target, const juce::String& text, 
 }
 
 bool ApoBridge::start(juce::String& error) {
+    if (lock == nullptr) {
+        auto l = std::make_unique<juce::InterProcessLock>("BornToEQTheWorld-EqualizerAPO");
+        if (!l->enter(0)) {
+            error = "Another BEQ window is already sending its EQ to Equalizer APO. Turn it off there (or close that BEQ) first.";
+            return false;
+        }
+        lock = std::move(l);
+    }
+    if (startLocked(error)) return true;
+    lock->exit(); // couldn't start: let another BEQ have it
+    lock.reset();
+    return false;
+}
+
+bool ApoBridge::startLocked(juce::String& error) {
     dir = findConfigDir();
     if (dir == juce::File()) {
         error = "Equalizer APO was not found. Install it (and pick your headphone output in its Device Selector), then try again.";
@@ -55,6 +70,7 @@ bool ApoBridge::start(juce::String& error) {
 void ApoBridge::stop() {
     if (!on) return;
     on = false;
+    struct Release { std::unique_ptr<juce::InterProcessLock>& l; ~Release() { if (l) { l->exit(); l.reset(); } } } release { lock };
     juce::String ignored;
     const auto config = dir.getChildFile("config.txt");
     replaceFile(config, bteq::apo::restore(config.loadFileAsString().toStdString()), ignored);

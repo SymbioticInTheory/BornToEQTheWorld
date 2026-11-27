@@ -20,7 +20,10 @@ public:
     juce::File folder() const { return dir; }
 
 private:
+    bool startLocked(juce::String& error);
     static bool replaceFile(const juce::File& target, const juce::String& text, juce::String& error);
     juce::File dir;
     bool on = false;
+    // Held while this copy of BEQ sends to APO, so a second copy can't fight over the same file.
+    std::unique_ptr<juce::InterProcessLock> lock;
 };
