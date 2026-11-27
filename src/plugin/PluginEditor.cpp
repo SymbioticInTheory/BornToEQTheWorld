@@ -1227,6 +1227,12 @@ BteqEditor::BteqEditor(BteqProcessor& p)
         content.addAndMakeVisible(s);
     }
 
+    backgroundButton.getProperties().set("kind", "small");
+    backgroundButton.setTitle("Background");
+    backgroundButton.setTooltip("Pick a background. BEQ takes its colours from it and adds them as the last dot");
+    backgroundButton.onClick = [this] { showBackgroundMenu(); };
+    content.addAndMakeVisible(backgroundButton);
+
     preampValue.setFont(theme->labelFont(16.0f));
     preampValue.setColour(juce::Label::textColourId, Theme::text);
     preampValue.setJustificationType(juce::Justification::centredLeft);
@@ -1554,8 +1560,8 @@ void BteqEditor::layoutContent() {
     rTabs = { x, top, 276, 48 };
     rSummary = side ? juce::Rectangle<int>() : juce::Rectangle<int>(rTabs.getRight() + gap, top, right - rTabs.getRight() - gap, 48);
     rGraph = { x, 150, right - x, 290 };
-    // Correction box, with the colour dots in their own small box under its right half.
-    rColour = { 1062 - 118, bottom - 36, 118, 36 };
+    // Correction box, with the colour dots and the background button in their own small box under it.
+    rColour = { 826, bottom - 36, 236, 36 };
     rCorrection = { 826, 452, 236, rColour.getY() - gap - 452 };
     rFilters = { x, 452, rCorrection.getX() - 14 - x, bottom - 452 };
 
@@ -1585,11 +1591,12 @@ void BteqEditor::layoutContent() {
     savedButton.setBounds(462, 18, 210, 36);
     apoButton.setBounds(savedButton.getX() - 18 - 160, 21, 160, 30);
     const int shown = Theme::hasImage ? Theme::numAccents : Theme::numBuiltIn;
-    const int dot = 20, dotGap = 6, dotsW = shown * dot + (shown - 1) * dotGap;
+    const int dot = 20, dotGap = 4, dotsW = shown * dot + (shown - 1) * dotGap;
     swatches[(size_t)Theme::imageAccent].setVisible(Theme::hasImage);
     for (int i = 0; i < shown; ++i)
-        swatches[(size_t)i].setBounds(rColour.getX() + (rColour.getWidth() - dotsW) / 2 + i * (dot + dotGap),
-                                      rColour.getCentreY() - dot / 2, dot, dot);
+        swatches[(size_t)i].setBounds(rColour.getX() + 10 + i * (dot + dotGap), rColour.getCentreY() - dot / 2, dot, dot);
+    juce::ignoreUnused(dotsW);
+    backgroundButton.setBounds(rColour.getRight() - 8 - 86, rColour.getCentreY() - 11, 86, 22);
 }
 
 void BteqEditor::toggleCollapse(int what) {
@@ -1738,24 +1745,31 @@ void BteqEditor::mouseDown(const juce::MouseEvent& e) {
     showScaleMenu();
 }
 
-void BteqEditor::showScaleMenu() {
+// The background button: the same background choices as the right-click menu.
+void BteqEditor::showBackgroundMenu() { showScaleMenu(false); }
+
+void BteqEditor::showScaleMenu(bool withSizes) {
     juce::PopupMenu menu;
-    menu.addSectionHeader("Window size");
-    const int sizes[] = { 125, 110, 100, 90, 75, 60, 50 };
-    for (int pct : sizes)
-        menu.addItem(pct, juce::String(pct) + "%", true, juce::roundToInt(proc.uiScale * 100.0f) == pct);
+    if (withSizes) {
+        menu.addSectionHeader("Window size");
+        const int sizes[] = { 125, 110, 100, 90, 75, 60, 50 };
+        for (int pct : sizes)
+            menu.addItem(pct, juce::String(pct) + "%", true, juce::roundToInt(proc.uiScale * 100.0f) == pct);
+    }
     static constexpr int kImage = 1001, kForest = 1002, kBuiltIn = 1010;
     static const char* builtIn[] = { "Sunset", "Ocean", "Neon", "Moss", "Concrete" };
     juce::String current;
     if (auto xml = juce::XmlDocument::parse(settingsFile())) current = xml->getStringAttribute("background");
-    menu.addSectionHeader("Background");
+    if (withSizes) menu.addSectionHeader("Background");
     menu.addItem(kForest, "Forest", true, !Theme::hasImage);
     for (int i = 0; i < 5; ++i)
         menu.addItem(kBuiltIn + i, builtIn[i], true, Theme::hasImage && current == builtIn[i]);
     menu.addItem(kImage, Theme::hasImage && current == "custom" ? "Your own image (choose another)..." : "Your own image...",
                  true, Theme::hasImage && current == "custom");
     juce::Component::SafePointer<BteqEditor> safe(this);
-    menu.showMenuAsync(juce::PopupMenu::Options(), [safe](int id) {
+    auto options = juce::PopupMenu::Options();
+    if (!withSizes) options = options.withTargetComponent(&backgroundButton);
+    menu.showMenuAsync(options, [safe](int id) {
         if (safe == nullptr || id <= 0) return;
         if (id == kImage) { safe->chooseBackground(); return; }
         if (id == kForest) { safe->useForest(); return; }
