@@ -374,7 +374,7 @@ void ResponseGraph::timerCallback() {
         const bool restart = s.block != overlay->settings.block || s.window != overlay->settings.window || s.where != overlay->settings.where;
         overlay->settings = s;
         if (restart) overlay->reset();
-        proc.spectrumTap.where = s.where;
+        proc.spectrumTap.where = bteq::spectrum::Tap::tapPoint(s.where);
     }
     feedAnalyser(*overlay, proc, overlayGeneration);
     repaint(plotArea().toNearestInt());

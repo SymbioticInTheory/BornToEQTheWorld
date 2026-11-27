@@ -183,9 +183,10 @@ public:
     // ...and Equalizer APO is applying BEQ's EQ to it, so "before correction" is
     // that sound with BEQ's response taken back out.
     bool analyserUndoesEq() const { return spectrumTap.external.load() && apoRunning.load(); }
-    // What BEQ's EQ does at each frequency, in dB, all of it: the same as
-    // apoConfigText() (correction, My EQ, preamp, trim; 0 when bypassed).
-    std::vector<double> appliedResponseDb(const std::vector<double>& freqs) const;
+    // What BEQ's EQ does at each frequency, in dB: by default all of it, the same as
+    // apoConfigText() (correction, My EQ, preamp, trim; 0 when bypassed). Either part
+    // can be left out: the correction (with its preamp and the trim) or My EQ (with its gain).
+    std::vector<double> appliedResponseDb(const std::vector<double>& freqs, bool correction = true, bool myEq = true) const;
     // Analyser settings, shared by every BEQ (settings.xml "analyser").
     // Message thread only; analyserVersion() changes whenever they do, so open views can follow.
     static const bteq::spectrum::Settings& analyserSettings();

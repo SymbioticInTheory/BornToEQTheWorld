@@ -23,7 +23,7 @@
 namespace bteq::spectrum {
 
 struct Settings {
-    int where = 0;          // 0: the input, before any correction; 1: the output
+    int where = 0;          // 0: before any EQ; 1: after the correction (the output); 2: with only My EQ
     int view = 0;           // 0: live + average, 1: average, 2: live
     int window = 0;         // 0: Hann, 1: Blackman-Harris
     double avgMs = 6000;    // 0: average until reset
@@ -48,7 +48,7 @@ struct Settings {
             return d;
         if (!(in >> r.open)) r.open = 1;
         r.open = r.open ? 1 : 0;
-        r.where = std::clamp(r.where, 0, 1);
+        r.where = std::clamp(r.where, 0, 2);
         r.view = std::clamp(r.view, 0, 2);
         r.window = std::clamp(r.window, 0, 1);
         r.avgMs = std::clamp(r.avgMs, 0.0, 120000.0);
@@ -122,7 +122,8 @@ public:
         return true;
     }
 
-    std::atomic<int> where { 0 }; // which point in the chain the audio thread taps
+    std::atomic<int> where { 0 }; // which point in the chain the audio thread taps (0 input, 1 output)
+    static int tapPoint(int settingsWhere) { return settingsWhere == 1 ? 1 : 0; } // "with only My EQ" is worked out from the input
     // Fed from outside instead (the standalone's loopback): the audio thread leaves
     // it alone, and `rate` is that source's sample rate. `generation` changes
     // whenever the source does, so views start their average again.
@@ -164,9 +165,10 @@ inline void fft(std::vector<std::complex<double>>& a) {
 class Analyser {
 public:
     Settings settings;
-    // Optional: changes each curve before it is shown (frequencies, dB in place);
-    // the standalone uses it to take BEQ's EQ back out of what Windows plays.
-    std::function<void(const std::vector<double>& freqs, std::vector<double>& db)> adjust;
+    // Optional: dB to add at each FFT bin's frequency, applied to the power before
+    // any smoothing (so narrow cuts come out exactly). Return empty for none. The
+    // standalone uses it to take BEQ's EQ back out of what Windows plays.
+    std::function<std::vector<double>(const std::vector<double>& binFreqs)> binOffsetDb;
 
     void reset() { avg.clear(); live.clear(); frames = 0; }
     bool hasData() const { return !avg.empty() && frames > 0; }
@@ -195,10 +197,21 @@ public:
     // and smoothing. `average`: the long-term average, else the live line.
     std::vector<double> curve(bool average, int points) const {
         std::vector<double> out((size_t)std::max(points, 2), settings.lo - 20);
-        const auto& power = average ? avg : live;
-        if (power.empty() || points < 2) return out;
-        const size_t nb = power.size();
+        const auto& raw = average ? avg : live;
+        if (raw.empty() || points < 2) return out;
+        const size_t nb = raw.size();
         const double hz = sampleRate / (2.0 * (double)nb);
+        std::vector<double> adjusted;
+        if (binOffsetDb) {
+            std::vector<double> bf(nb);
+            for (size_t i = 0; i < nb; ++i) bf[i] = (double)i * hz;
+            const auto off = binOffsetDb(bf);
+            if (off.size() == nb) {
+                adjusted.resize(nb);
+                for (size_t i = 0; i < nb; ++i) adjusted[i] = raw[i] * std::pow(10.0, off[i] / 10.0);
+            }
+        }
+        const auto& power = adjusted.empty() ? raw : adjusted;
         std::vector<double> sum(nb + 1, 0.0);
         for (size_t i = 0; i < nb; ++i) sum[i + 1] = sum[i] + power[i];
         const double span = std::log2(settings.fHi / settings.fLo), step = span / (points - 1);
@@ -241,7 +254,6 @@ public:
         }
         for (int j = 0; j < points; ++j)
             out[(size_t)j] = 10 * std::log10(std::max(1e-30, pts[(size_t)j])) + settings.slope * std::log2(freq[(size_t)j] / 1000.0);
-        if (adjust) adjust(freq, out);
         return out;
     }
 

@@ -41,17 +41,28 @@ void paintSpectrum(juce::Graphics& g, juce::Rectangle<float> a, const bteq::spec
 }
 
 void connectAnalyser(bteq::spectrum::Analyser& an, const BteqProcessor& proc) {
-    struct Cache { std::vector<double> freqs, db; juce::uint32 when = 0; };
+    struct Cache { std::vector<double> freqs, db; int mode = 0; juce::uint32 when = 0; };
     auto cache = std::make_shared<Cache>();
-    an.adjust = [&an, &proc, cache](const std::vector<double>& freqs, std::vector<double>& db) {
-        if (an.settings.where != 0 || !proc.analyserUndoesEq()) return;
+    an.binOffsetDb = [&an, &proc, cache](const std::vector<double>& freqs) -> std::vector<double> {
+        // What to do to the sound the tap has, to show the chosen point:
+        //   plugin (tap at the input):  before any EQ: nothing; with only My EQ: add My EQ.
+        //   standalone with Equalizer APO (what Windows plays, after all of BEQ's EQ):
+        //     before any EQ: take all of it out; with only My EQ: take the correction out.
+        const int where = an.settings.where;
+        int mode = 0; // 0 nothing, 1 add My EQ, 2 remove everything, 3 remove the correction
+        if (proc.analyserUndoesEq()) mode = where == 1 ? 0 : where == 0 ? 2 : 3;
+        else mode = where == 2 ? 1 : 0; // no EQ in the sound yet (also Windows' sound while APO is off)
+        if (mode == 0) return {};
         const auto now = juce::Time::getMillisecondCounter();
-        if (cache->freqs != freqs || now - cache->when > 250) { // follows the EQ as you change it
+        if (cache->freqs != freqs || cache->mode != mode || now - cache->when > 250) { // follows the EQ as you change it
             cache->freqs = freqs;
-            cache->db = proc.appliedResponseDb(freqs);
+            cache->mode = mode;
+            cache->db = proc.appliedResponseDb(freqs, mode != 1, mode != 3);
+            if (mode != 1)
+                for (auto& d : cache->db) d = -d; // take it back out
             cache->when = now;
         }
-        for (size_t i = 0; i < db.size() && i < cache->db.size(); ++i) db[i] -= cache->db[i];
+        return cache->db;
     };
 }
 
@@ -72,7 +83,7 @@ juce::String smoothText(double oct) {
     const auto& st = bteq::spectrum::smoothSteps()[(size_t)bteq::spectrum::smoothIndex(oct)];
     return st.oct <= 0 ? juce::String("Off") : juce::String(st.name) + " oct";
 }
-const juce::StringArray kWhere { "Before correction", "After correction" }, kView { "Live + average", "Average", "Live" },
+const juce::StringArray kWhere { "Before any EQ", "After correction", "With My EQ only" }, kView { "Live + average", "Average", "Live" },
     kWindow { "Hann", "Blackman-Harris" }, kBlocks { "2048", "4096", "8192", "16384", "32768" };
 } // namespace
 
@@ -87,7 +98,8 @@ AnalyserPanel::AnalyserPanel(BteqProcessor& p, const Theme& t, juce::LookAndFeel
         b->getProperties().set("kind", "pill");
         addAndMakeVisible(b);
     }
-    whereButton.setTooltip("Measure the input before any correction (what comes in), or the output after it");
+    whereButton.setTooltip("Before any EQ: the sound as it comes in. With My EQ only: that plus My EQ, without the headphone "
+                           "correction (see My EQ's effect as you tune). After correction: what you hear, everything applied");
     whereButton.onClick = [this] {
         showChoices(whereButton, kWhere, analyser.settings.where, [this](int i) { change([i](Settings& s) { s.where = i; }); });
     };
@@ -197,7 +209,7 @@ void AnalyserPanel::followSettings() {
     const bool restart = s.block != analyser.settings.block || s.window != analyser.settings.window || s.where != analyser.settings.where;
     analyser.settings = s;
     if (restart) analyser.reset();
-    proc.spectrumTap.where = s.where;
+    proc.spectrumTap.where = bteq::spectrum::Tap::tapPoint(s.where);
     refreshControls();
     repaint();
 }
@@ -331,11 +343,13 @@ void AnalyserPanel::paint(juce::Graphics& g) {
     g.drawText("SPECTRUM", 14, 8, 100, 20, juce::Justification::centredLeft);
     g.setFont(theme.bodyFont(14.0f));
     g.setColour(Theme::soft);
-    juce::String source = analyser.settings.where == 0 ? "Input, before any correction" : "Output, after the correction";
+    const int where = analyser.settings.where;
+    juce::String source = where == 0 ? "Input, before any EQ" : where == 2 ? "Input with My EQ only, no correction" : "Output, after the correction";
     if (proc.analyserHearsSystem())
         source = !proc.analyserUndoesEq() ? juce::String("What Windows is playing")
-                 : analyser.settings.where == 0 ? juce::String("What Windows plays, before BEQ's EQ")
-                                                : juce::String("What Windows plays, after BEQ's EQ");
+                 : where == 0 ? juce::String("What Windows plays, before BEQ's EQ")
+                 : where == 2 ? juce::String("What Windows plays, with only My EQ")
+                              : juce::String("What Windows plays, after BEQ's EQ");
     g.drawText(source, 104, 8, 320, 20, juce::Justification::centredLeft);
 
     const auto a = plotArea();
