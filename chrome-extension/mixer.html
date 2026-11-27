@@ -3,12 +3,27 @@
 <head>
 <meta charset="utf-8">
 <title>BEQ Mixer</title>
+<link rel="icon" sizes="16x16" href="assets/mixer16.png">
+<link rel="icon" sizes="32x32" href="assets/mixer32.png">
+<link rel="icon" sizes="48x48" href="assets/mixer48.png">
+<link rel="icon" sizes="128x128" href="assets/mixer128.png">
 <link rel="stylesheet" href="popup.css">
 <link rel="stylesheet" href="mixer.css">
 </head>
 <body class="window">
   <header>
     <img id="title" src="assets/title0.png" alt="Born To EQ The World">
+    <div class="master" title="Master: every tab that is on. Drag up or down, scroll, or double-click for 0 dB">
+      <span class="label">Master</span>
+      <svg id="knob" viewBox="0 0 48 48" width="42" height="42" tabindex="0">
+        <circle cx="24" cy="24" r="17" class="knob-body"/>
+        <path id="knobTrack" class="knob-track"/>
+        <path id="knobArc" class="knob-arc"/>
+        <line id="knobPointer" x1="24" y1="24" x2="24" y2="12" class="knob-pointer"/>
+      </svg>
+      <span id="masterValue" class="value">0.0 dB</span>
+      <button id="masterMute" class="pill small" title="Mute every tab playing sound">Mute</button>
+    </div>
   </header>
   <div class="sub"><span class="label">Mixer</span><span class="hint">Every tab playing sound</span></div>
 

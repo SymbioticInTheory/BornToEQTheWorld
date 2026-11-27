@@ -212,6 +212,11 @@ async function init() {
   }
   if (fromMixer) {
     document.body.classList.add('window');
+    for (const n of [16, 32, 48, 128]) {   // keep the mixer's own icon in this window
+      const l = document.createElement('link');
+      l.rel = 'icon'; l.sizes = `${n}x${n}`; l.href = `assets/mixer${n}.png`;
+      document.head.appendChild(l);
+    }
     $('mixer').textContent = '‹ Mixer';
     $('mixer').title = 'Back to the mixer';
   }

@@ -33,6 +33,10 @@ tab playing sound:
   still needs one click on the BEQ icon while you're on that tab (once per page
   load); after that it can be switched on and off from the mixer.
 - Click a tab's name to jump to it.
+- **Master** turns every tab that is on up or down together. Drag it up or
+  down (Shift for fine steps), scroll on it, or double-click for 0 dB.
+- **Mute** next to it silences every tab playing sound. Pressing it again
+  unmutes only the tabs it muted, not ones you muted yourself.
 
 The mixer needs Chrome's "tabs" permission to show tab titles and icons, so
 Chrome lists the extension as able to read your browsing history. Nothing

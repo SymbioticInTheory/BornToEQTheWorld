@@ -169,7 +169,8 @@ async function doRefresh() {
   eqTabs = (await chrome.storage.session.get('tabs')).tabs || {};
   const all = await chrome.tabs.query({});
   // EQ'd tabs first, then the others playing sound.
-  const shown = all.filter((t) => eqTabs[t.id] || t.audible || notes.has(t.id))
+  const own = chrome.runtime.getURL('');
+  const shown = all.filter((t) => !(t.url || '').startsWith(own) && (eqTabs[t.id] || t.audible || notes.has(t.id)))
     .sort((a, b) => (!!eqTabs[b.id] - !!eqTabs[a.id]) || a.id - b.id);
   const box = $('rows');
   const keep = new Set(shown.map((t) => t.id));
@@ -181,6 +182,74 @@ async function doRefresh() {
     update(el, tab);
   });
   $('empty').hidden = shown.length > 0;
+}
+
+// ---------------------------------------------------------------- master knob
+const MASTER_MIN = -30, MASTER_MAX = 6;
+let masterDb = 0;
+let masterTimer = null;
+let masterMute = false;
+
+function knobPoint(a, r) {   // angle in degrees, 0 = straight up
+  const t = (a - 90) * Math.PI / 180;
+  return [24 + r * Math.cos(t), 24 + r * Math.sin(t)];
+}
+function arc(a0, a1, r) {
+  const [x0, y0] = knobPoint(a0, r), [x1, y1] = knobPoint(a1, r);
+  return `M ${x0} ${y0} A ${r} ${r} 0 ${Math.abs(a1 - a0) > 180 ? 1 : 0} ${a1 > a0 ? 1 : 0} ${x1} ${y1}`;
+}
+const angleFor = (db) => -135 + 270 * (db - MASTER_MIN) / (MASTER_MAX - MASTER_MIN);
+
+function drawKnob() {
+  const a = angleFor(masterDb), zero = angleFor(0), r = 21;
+  $('knobTrack').setAttribute('d', arc(-135, 135, r));
+  $('knobArc').setAttribute('d', Math.abs(a - zero) < 0.5 ? '' : arc(Math.min(a, zero), Math.max(a, zero), r));
+  const [x, y] = knobPoint(a, 12);
+  $('knobPointer').setAttribute('x2', x);
+  $('knobPointer').setAttribute('y2', y);
+  $('masterValue').textContent = fmt(masterDb) + ' dB';
+  $('masterMute').classList.toggle('on', masterMute);
+  $('masterMute').textContent = masterMute ? 'Muted' : 'Mute';
+  $('knob').classList.toggle('muted', masterMute);
+}
+
+function setMasterDb(db) {
+  masterDb = Math.round(Math.min(MASTER_MAX, Math.max(MASTER_MIN, db)) * 2) / 2;
+  drawKnob();
+  if (masterTimer) return;
+  masterTimer = setTimeout(() => { masterTimer = null; send({ type: 'master', db: masterDb }); }, 30);
+}
+
+function buildKnob() {
+  const knob = $('knob');
+  let startY = 0, startDb = 0;
+  const move = (e) => {
+    const per = e.shiftKey ? 0.05 : 0.25;   // dB per pixel; Shift for fine steps
+    setMasterDb(startDb + (startY - e.clientY) * per);
+  };
+  knob.addEventListener('pointerdown', (e) => {
+    startY = e.clientY; startDb = masterDb;
+    knob.setPointerCapture(e.pointerId);
+    knob.addEventListener('pointermove', move);
+  });
+  const end = () => knob.removeEventListener('pointermove', move);
+  knob.addEventListener('pointerup', end);
+  knob.addEventListener('pointercancel', end);
+  knob.addEventListener('dblclick', () => setMasterDb(0));
+  $('masterMute').addEventListener('click', async () => {
+    masterMute = !masterMute;
+    drawKnob();
+    await send({ type: 'masterMute', on: masterMute });
+  });
+  knob.addEventListener('wheel', (e) => { e.preventDefault(); setMasterDb(masterDb + (e.deltaY < 0 ? 0.5 : -0.5)); }, { passive: false });
+  knob.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') setMasterDb(masterDb + 0.5);
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') setMasterDb(masterDb - 0.5);
+    else if (e.key === '0') setMasterDb(0);
+    else return;
+    e.preventDefault();
+  });
+  drawKnob();
 }
 
 // ---------------------------------------------------------------- theme
@@ -204,11 +273,14 @@ function applyTheme() {
 
 // ---------------------------------------------------------------- start
 async function init() {
-  const s = await chrome.storage.local.get(['profiles', 'accent', 'lastSettings']);
+  const s = await chrome.storage.local.get(['profiles', 'accent', 'lastSettings', 'master']);
+  masterDb = s.master ?? 0;
+  masterMute = !!(await chrome.storage.session.get('masterMute')).masterMute;
   profiles = s.profiles || {};
   accent = s.accent ?? 0;
   lastSettings = s.lastSettings || null;
   buildSwatches();
+  buildKnob();
   applyTheme();
 
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -221,6 +293,7 @@ async function init() {
         refresh();
       }
     }
+    if (area === 'session' && changes.masterMute) { masterMute = !!changes.masterMute.newValue; drawKnob(); }
     if (area === 'session' && changes.tabs && pending.size === 0) {
       for (const id of Object.keys(changes.tabs.newValue || {})) notes.delete(Number(id));
       refresh();
