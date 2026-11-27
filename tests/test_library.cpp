@@ -53,9 +53,9 @@ int main(int argc, char** argv) {
         CHECK(g.has_value());
         if (g) {
             CHECK(g->freqs == lib.graphicFrequencies());
-            CHECK(p->graphicGainsDb.size() == g->gainsDb.size());
-            for (size_t i = 0; i < g->gainsDb.size() && i < p->graphicGainsDb.size(); ++i)
-                CHECK(std::fabs(p->graphicGainsDb[i] - g->gainsDb[i]) < 1e-6);
+            CHECK(p->graphicSize() == g->gainsDb.size());
+            for (size_t i = 0; i < g->gainsDb.size() && i < p->graphicSize(); ++i)
+                CHECK(p->graphicDb(i) == static_cast<float>(g->gainsDb[i])); // exactly what the text said
         }
     }
 

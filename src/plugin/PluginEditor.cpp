@@ -340,6 +340,7 @@ void ResponseGraph::setAdvanced(bool on) {
     proc.advancedView = on;
     advancedButton.setToggleState(on, juce::dontSendNotification);
     if (on && curves == nullptr) curves = std::make_unique<juce::SharedResourcePointer<CurvesHolder>>();
+    if (!on) curves.reset(); // about 12 MB of measurements, loaded again when the view is turned on
     repaint();
 }
 
@@ -1653,8 +1654,8 @@ public:
 private:
     void refresh() {
         results.clear();
-        const auto* curves = proc.curveLibrary();
-        if (curves == nullptr) return;
+        if (!curvesRef->loaded) return;
+        const auto* curves = &curvesRef->curves;
         for (const auto i : proc.library().search(search.getText().toStdString(), 400)) {
             const std::string name = proc.library().headphoneName(i);
             if (juce::String(name) != proc.selectedHeadphone() && curves->hasMeasurement(name)) results.push_back(name);
@@ -1680,6 +1681,7 @@ private:
     }
 
     BteqProcessor& proc;
+    juce::SharedResourcePointer<CurvesHolder> curvesRef; // measurements, only while this is open
     const Theme& theme;
     std::function<void(juce::String)> onChosen;
     juce::TextEditor search;
@@ -1760,7 +1762,12 @@ void BteqEditor::showScaleMenu(bool withSizes) {
     static const char* builtIn[] = { "Sunset", "Ocean", "Neon", "Moss", "Concrete" };
     juce::String current;
     if (auto xml = juce::XmlDocument::parse(settingsFile())) current = xml->getStringAttribute("background");
-    if (withSizes) menu.addSectionHeader("Background");
+    static constexpr int kLowMemory = 1020;
+    if (withSizes) {
+        menu.addSectionHeader("Memory");
+        menu.addItem(kLowMemory, "Low memory mode (no background picture)", true, Theme::lowMemory);
+        menu.addSectionHeader("Background");
+    }
     menu.addItem(kForest, "Forest", true, !Theme::hasImage);
     for (int i = 0; i < 5; ++i)
         menu.addItem(kBuiltIn + i, builtIn[i], true, Theme::hasImage && current == builtIn[i]);
@@ -1773,6 +1780,7 @@ void BteqEditor::showScaleMenu(bool withSizes) {
         if (safe == nullptr || id <= 0) return;
         if (id == kImage) { safe->chooseBackground(); return; }
         if (id == kForest) { safe->useForest(); return; }
+        if (id == kLowMemory) { safe->setLowMemory(!Theme::lowMemory); return; }
         if (id >= kBuiltIn && id < kBuiltIn + 5) { safe->useBuiltInBackground(builtIn[id - kBuiltIn]); return; }
         safe->setUiScale((float)id / 100.0f);
         auto xml = juce::XmlDocument::parse(settingsFile());
@@ -1788,15 +1796,18 @@ juce::File BteqEditor::backgroundFile() { return settingsFile().getSiblingFile("
 
 // Uses your image if there is one (picking the colours from it), else the forest.
 void BteqEditor::loadBackground() {
+    if (auto xml = juce::XmlDocument::parse(settingsFile())) Theme::lowMemory = xml->getBoolAttribute("lowMemory", false);
     juce::Image img;
     if (backgroundFile().existsAsFile()) img = juce::ImageFileFormat::loadFrom(backgroundFile());
     Theme::hasImage = img.isValid();
     if (!img.isValid()) {
-        background = juce::ImageCache::getFromMemory(BinaryData::forest_png, BinaryData::forest_pngSize);
+        background = Theme::lowMemory ? juce::Image()
+                                      : juce::ImageCache::getFromMemory(BinaryData::forest_png, BinaryData::forest_pngSize);
         Theme::fog = juce::Colour(0xff0A0B0C);
         return;
     }
-    background = img;
+    // Low memory: keep the colours, not the picture.
+    background = Theme::lowMemory ? juce::Image() : img;
     // Colours from a small copy: plenty for picking, and quick.
     const int w = 96, h = juce::jmax(1, juce::roundToInt(96.0 * img.getHeight() / img.getWidth()));
     const auto small = img.rescaled(w, h, juce::Graphics::mediumResamplingQuality);
@@ -1875,6 +1886,18 @@ void BteqEditor::useForest() {
     }
     loadBackground();
     if (proc.accentIndex == Theme::imageAccent) setAccent(0);
+    backgroundChanged();
+}
+
+// Low memory mode: no background picture in any BEQ window (the colours stay).
+void BteqEditor::setLowMemory(bool on) {
+    auto xml = juce::XmlDocument::parse(settingsFile());
+    if (xml == nullptr) xml = std::make_unique<juce::XmlElement>("SETTINGS");
+    xml->setAttribute("lowMemory", on);
+    settingsFile().getParentDirectory().createDirectory();
+    xml->writeTo(settingsFile());
+    loadBackground();
+    if (on) juce::ImageCache::releaseUnusedImages();
     backgroundChanged();
 }
 

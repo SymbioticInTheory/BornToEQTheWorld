@@ -12,6 +12,8 @@
 #include <fstream>
 #include <optional>
 #include <sstream>
+#include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -29,7 +31,18 @@ struct HeadphoneProfile {
     std::string target; // e.g. "Harman Target", "Harman over-ear 2018", "oratory1990 Optimum HiFi"
     bool hasParametric = false;
     ParametricPreset parametric;
-    std::vector<float> graphicGainsDb; // matches HeadphoneLibrary::graphicFrequencies()
+    // Graphic EQ gains, matching HeadphoneLibrary::graphicFrequencies(). Kept as
+    // tenths of a dB (every published value has one decimal), which takes half the
+    // memory of floats and gives back exactly the same numbers.
+    std::vector<int16_t> graphicTenths;
+    bool hasGraphic() const { return !graphicTenths.empty(); }
+    size_t graphicSize() const { return graphicTenths.size(); }
+    float graphicDb(size_t i) const { return static_cast<float>(graphicTenths[i] / 10.0); }
+    std::vector<float> graphicGainsDb() const {
+        std::vector<float> out(graphicTenths.size());
+        for (size_t i = 0; i < out.size(); ++i) out[i] = graphicDb(i);
+        return out;
+    }
 
     // Label for the source dropdown, e.g. "crinacle (GRAS 43AG-7)".
     std::string sourceLabel() const { return rig.empty() ? source : source + " (" + rig + ")"; }
@@ -86,20 +99,34 @@ inline std::string searchKey(const std::string& s) {
 class HeadphoneLibrary {
 public:
     // Parses the contents of data/headphones.tsv. Returns false on a bad header.
-    bool loadFromText(const std::string& text) {
+    bool loadFromText(const std::string& text) { return loadFromText(text.data(), text.size()); }
+
+    // Reads straight from the buffer, one line at a time, so loading needs no extra
+    // copies of the (22 MB) text.
+    bool loadFromText(const char* data, size_t size) {
         profiles.clear(); names.clear(); freqs.clear(); version.clear();
-        std::istringstream in(text);
+        size_t pos = 0;
         std::string line;
-        if (!std::getline(in, line)) return false;
+        auto getline = [&](std::string& out) {
+            if (pos >= size) return false;
+            const char* start = data + pos;
+            const void* nl = std::memchr(start, '\n', size - pos);
+            const size_t len = nl != nullptr ? (size_t)((const char*)nl - start) : size - pos;
+            out.assign(start, len);
+            pos += len + 1;
+            return true;
+        };
+        if (!getline(line)) return false;
         auto head = detail::split(line, '\t');
         if (head.size() < 3 || head[0] != "BTEQLIB" || head[1] != "2") return false;
         version = head[2];
-        if (!std::getline(in, line)) return false;
+        if (!getline(line)) return false;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
         auto fr = detail::split(line, '\t');
         if (fr.size() != 2 || fr[0] != "FREQS") return false;
         for (const auto& f : detail::split(fr[1], ',')) freqs.push_back(std::atof(f.c_str()));
 
-        while (std::getline(in, line)) {
+        while (getline(line)) {
             if (!line.empty() && line.back() == '\r') line.pop_back();
             auto c = detail::split(line, '\t');
             if (c.size() != 10) continue;
@@ -129,12 +156,16 @@ public:
             }
             if (!c[9].empty())
                 for (const auto& g : detail::split(c[9], ','))
-                    p.graphicGainsDb.push_back(static_cast<float>(std::atof(g.c_str())));
+                    p.graphicTenths.push_back(static_cast<int16_t>(std::lround(std::atof(g.c_str()) * 10.0)));
+            p.graphicTenths.shrink_to_fit();
+            p.parametric.filters.shrink_to_fit();
             if (names.empty() || names.back().name != p.name)
                 names.push_back({p.name, detail::searchKey(p.name), profiles.size(), 0});
             names.back().count++;
             profiles.push_back(std::move(p));
         }
+        profiles.shrink_to_fit();
+        names.shrink_to_fit();
         return !profiles.empty();
     }
 
