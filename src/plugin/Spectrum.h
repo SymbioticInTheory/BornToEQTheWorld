@@ -14,6 +14,7 @@
 #include <complex>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -54,7 +55,7 @@ struct Settings {
         if (r.block < 1024 || r.block > 32768 || (r.block & (r.block - 1)) != 0) r.block = d.block;
         r.overlap = std::clamp(r.overlap, 0.0, 0.95);
         r.slope = std::clamp(r.slope, -6.0, 12.0);
-        r.smooth = std::clamp(r.smooth, 0.0, 2.0);
+        r.smooth = std::clamp(r.smooth, 0.0, 2.5);
         r.lo = std::clamp(r.lo, -160.0, 20.0);
         r.hi = std::clamp(r.hi, r.lo + 6, 30.0);
         r.fLo = std::clamp(r.fLo, 10.0, 10000.0);
@@ -62,6 +63,24 @@ struct Settings {
         return r;
     }
 };
+
+// The smoothing choices, in octaves (the same steps as SPAN); 0 = off.
+struct SmoothStep { double oct; const char* name; };
+inline const std::vector<SmoothStep>& smoothSteps() {
+    static const std::vector<SmoothStep> steps { { 0, "Off" },         { 1.0 / 48, "1/48" }, { 1.0 / 24, "1/24" }, { 1.0 / 12, "1/12" },
+                                                 { 1.0 / 9, "1/9" },   { 1.0 / 6, "1/6" },   { 1.0 / 5, "1/5" },   { 1.0 / 4, "1/4" },
+                                                 { 1.0 / 3, "1/3" },   { 1.0 / 2, "1/2" },   { 2.0 / 3, "2/3" },   { 3.0 / 4, "3/4" },
+                                                 { 1, "1" },           { 2, "2" },           { 2.5, "2.5" } };
+    return steps;
+}
+// The step nearest to `oct` (a value saved before the steps existed lands on the closest one).
+inline int smoothIndex(double oct) {
+    const auto& st = smoothSteps();
+    int best = 0;
+    for (int i = 1; i < (int)st.size(); ++i)
+        if (std::abs(st[(size_t)i].oct - oct) < std::abs(st[(size_t)best].oct - oct)) best = i;
+    return best;
+}
 
 // Samples for the analyser, written by the audio thread (mono: the channels averaged).
 // The buffer is made the first time a view asks for it and kept until the processor
@@ -104,6 +123,12 @@ public:
     }
 
     std::atomic<int> where { 0 }; // which point in the chain the audio thread taps
+    // Fed from outside instead (the standalone's loopback): the audio thread leaves
+    // it alone, and `rate` is that source's sample rate. `generation` changes
+    // whenever the source does, so views start their average again.
+    std::atomic<bool> external { false };
+    std::atomic<double> rate { 0.0 };
+    std::atomic<int> generation { 0 };
 
 private:
     std::atomic<int> viewers { 0 };
@@ -139,6 +164,9 @@ inline void fft(std::vector<std::complex<double>>& a) {
 class Analyser {
 public:
     Settings settings;
+    // Optional: changes each curve before it is shown (frequencies, dB in place);
+    // the standalone uses it to take BEQ's EQ back out of what Windows plays.
+    std::function<void(const std::vector<double>& freqs, std::vector<double>& db)> adjust;
 
     void reset() { avg.clear(); live.clear(); frames = 0; }
     bool hasData() const { return !avg.empty() && frames > 0; }
@@ -213,6 +241,7 @@ public:
         }
         for (int j = 0; j < points; ++j)
             out[(size_t)j] = 10 * std::log10(std::max(1e-30, pts[(size_t)j])) + settings.slope * std::log2(freq[(size_t)j] / 1000.0);
+        if (adjust) adjust(freq, out);
         return out;
     }
 

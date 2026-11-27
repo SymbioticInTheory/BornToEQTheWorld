@@ -23,6 +23,7 @@
 
   <section class="panel plot">
     <canvas id="plot"></canvas>
+    <div id="range" class="range" title="Zoom the level axis: drag the ends in or out, drag the middle to move it, scroll on it, double-click for the default"><div id="rangeThumb" class="range-thumb"></div></div>
     <div id="idle" class="idle" hidden>Nothing is playing through BEQ. Turn a tab on and it shows here.</div>
   </section>
 
@@ -43,6 +44,8 @@
         <select id="block">
           <option>2048</option><option>4096</option><option>8192</option><option>16384</option><option>32768</option>
         </select></label>
+      <label>Smoothing
+        <select id="smooth" title="Averages over this many octaves, so the shape is easier to read"></select></label>
       <div class="pick-buttons">
         <button id="reset" class="btn" title="Start the average again (or double-click the graph)">Reset</button>
         <button id="defaults" class="btn" title="Back to the mastering defaults">Defaults</button>

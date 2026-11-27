@@ -40,16 +40,37 @@ void paintSpectrum(juce::Graphics& g, juce::Rectangle<float> a, const bteq::spec
     }
 }
 
+void connectAnalyser(bteq::spectrum::Analyser& an, const BteqProcessor& proc) {
+    struct Cache { std::vector<double> freqs, db; juce::uint32 when = 0; };
+    auto cache = std::make_shared<Cache>();
+    an.adjust = [&an, &proc, cache](const std::vector<double>& freqs, std::vector<double>& db) {
+        if (an.settings.where != 0 || !proc.analyserUndoesEq()) return;
+        const auto now = juce::Time::getMillisecondCounter();
+        if (cache->freqs != freqs || now - cache->when > 250) { // follows the EQ as you change it
+            cache->freqs = freqs;
+            cache->db = proc.appliedResponseDb(freqs);
+            cache->when = now;
+        }
+        for (size_t i = 0; i < db.size() && i < cache->db.size(); ++i) db[i] -= cache->db[i];
+    };
+}
+
+void feedAnalyser(bteq::spectrum::Analyser& an, const BteqProcessor& proc, int& seenGeneration) {
+    const int gen = proc.spectrumTap.generation.load();
+    if (gen != seenGeneration) {
+        seenGeneration = gen;
+        an.reset();
+    }
+    an.process(proc.spectrumTap, proc.analyserRate());
+}
+
 namespace {
 juce::String freqText(double f) {
     return f >= 1000 ? juce::String(f / 1000.0, f >= 10000 ? 1 : 2) + " kHz" : juce::String((int)std::lround(f)) + " Hz";
 }
 juce::String smoothText(double oct) {
-    if (oct < 1e-3) return "Off";
-    for (int den : { 1, 2, 3, 6, 12, 24 })
-        for (int num = 1; num <= 2 * den; ++num)
-            if (std::abs(oct - (double)num / den) < 0.004) return (den == 1 ? juce::String(num) : juce::String(num) + "/" + juce::String(den)) + " oct";
-    return juce::String(oct, 2) + " oct";
+    const auto& st = bteq::spectrum::smoothSteps()[(size_t)bteq::spectrum::smoothIndex(oct)];
+    return st.oct <= 0 ? juce::String("Off") : juce::String(st.name) + " oct";
 }
 const juce::StringArray kWhere { "Before correction", "After correction" }, kView { "Live + average", "Average", "Live" },
     kWindow { "Hann", "Blackman-Harris" }, kBlocks { "2048", "4096", "8192", "16384", "32768" };
@@ -61,6 +82,7 @@ const juce::StringArray kWhere { "Before correction", "After correction" }, kVie
 AnalyserPanel::AnalyserPanel(BteqProcessor& p, const Theme& t, juce::LookAndFeel& lnf) : proc(p), theme(t) {
     setLookAndFeel(&lnf);
     proc.spectrumTap.addViewer();
+    connectAnalyser(analyser, proc);
     for (auto* b : { &whereButton, &viewButton, &windowButton, &blockButton, &resetButton, &defaultsButton }) {
         b->getProperties().set("kind", "pill");
         addAndMakeVisible(b);
@@ -107,10 +129,11 @@ AnalyserPanel::AnalyserPanel(BteqProcessor& p, const Theme& t, juce::LookAndFeel
           "How much each FFT block overlaps the last: higher updates more often" },
         { "Slope", -3, 9, 0.5, 3, d.slope, [](double v) { return juce::String(v, 1) + " dB/oct"; },
           "Tilts the display around 1 kHz, so a balanced mix looks flat (4.5 is common for mastering)" },
-        { "Smoothing", 0, 2, 1.0 / 24.0, 0.5, d.smooth, [](double v) { return smoothText(v); },
-          "Averages over this many octaves, so the shape is easier to read" },
-        { "Range low", -150, -20, 1, -80, d.lo, [](double v) { return juce::String((int)v) + " dB"; }, "Level at the bottom of the graph" },
-        { "Range high", -60, 20, 1, -20, d.hi, [](double v) { return juce::String((int)v) + " dB"; }, "Level at the top of the graph" },
+        { "Smoothing", 0, (double)bteq::spectrum::smoothSteps().size() - 1, 1, 7, (double)bteq::spectrum::smoothIndex(d.smooth),
+          [](double v) { return smoothText(bteq::spectrum::smoothSteps()[(size_t)juce::jlimit(0, 14, (int)std::lround(v))].oct); },
+          "Averages over this many octaves, so the shape is easier to read: Off, 1/48 up to 2.5 octaves, the same steps as SPAN" },
+        { "Range low", -150, 10, 1, -70, d.lo, [](double v) { return juce::String((int)v) + " dB"; }, "Level at the bottom of the graph" },
+        { "Range high", -140, 20, 1, -20, d.hi, [](double v) { return juce::String((int)v) + " dB"; }, "Level at the top of the graph" },
         { "Freq low", 10, 1000, 1, 60, d.fLo, [](double v) { return freqText(v); }, "Lowest frequency shown" },
         { "Freq high", 1000, 24000, 100, 8000, d.fHi, [](double v) { return freqText(v); }, "Highest frequency shown" },
     };
@@ -135,7 +158,7 @@ AnalyserPanel::AnalyserPanel(BteqProcessor& p, const Theme& t, juce::LookAndFeel
                     case kAvg: s.avgMs = v >= 30.95 ? 0.0 : v * 1000.0; break;
                     case kOverlap: s.overlap = v / 100.0; break;
                     case kSlope: s.slope = v; break;
-                    case kSmooth: s.smooth = v; break;
+                    case kSmooth: s.smooth = bteq::spectrum::smoothSteps()[(size_t)juce::jlimit(0, (int)bteq::spectrum::smoothSteps().size() - 1, (int)std::lround(v))].oct; break;
                     case kLo: s.lo = juce::jmin(v, s.hi - 6); break;
                     case kHi: s.hi = juce::jmax(v, s.lo + 6); break;
                     case kFLo: s.fLo = juce::jmin(v, s.fHi / 2); break;
@@ -146,6 +169,7 @@ AnalyserPanel::AnalyserPanel(BteqProcessor& p, const Theme& t, juce::LookAndFeel
         };
         addAndMakeVisible(k.knob);
     }
+    knobs[kSmooth].knob.onRightClick = [this] { showSmoothMenu(); };
     followSettings();
     startTimerHz(30);
 }
@@ -192,7 +216,7 @@ void AnalyserPanel::refreshControls() {
     viewButton.setButtonText(kView[s.view]);
     windowButton.setButtonText(kWindow[s.window]);
     blockButton.setButtonText("Block " + juce::String(s.block));
-    const double vals[] = { s.avgMs <= 0 ? 31.0 : s.avgMs / 1000.0, s.overlap * 100, s.slope, s.smooth, s.lo, s.hi, s.fLo, s.fHi };
+    const double vals[] = { s.avgMs <= 0 ? 31.0 : s.avgMs / 1000.0, s.overlap * 100, s.slope, (double)bteq::spectrum::smoothIndex(s.smooth), s.lo, s.hi, s.fLo, s.fHi };
     for (size_t i = 0; i < knobs.size(); ++i)
         if (!knobs[i].knob.isMouseButtonDown()) knobs[i].knob.setValue(vals[i], juce::dontSendNotification);
 }
@@ -205,6 +229,22 @@ void AnalyserPanel::showChoices(juce::TextButton& b, const juce::StringArray& na
     });
 }
 
+// Smoothing as a list, like SPAN's: right-click its knob or click its value.
+void AnalyserPanel::showSmoothMenu() {
+    juce::PopupMenu m;
+    const auto& st = bteq::spectrum::smoothSteps();
+    const int current = bteq::spectrum::smoothIndex(analyser.settings.smooth);
+    for (int i = 0; i < (int)st.size(); ++i) m.addItem(i + 1, i == 0 ? juce::String("Off") : juce::String(st[(size_t)i].name) + " oct", true, i == current);
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&knobs[kSmooth].knob), [this](int id) {
+        if (id > 0) change([id](Settings& s) { s.smooth = bteq::spectrum::smoothSteps()[(size_t)(id - 1)].oct; });
+    });
+}
+
+juce::Rectangle<int> AnalyserPanel::knobValueArea(int i) const {
+    const auto kb = knobs[(size_t)i].knob.getBounds();
+    return { kb.getCentreX() - 45, kb.getBottom() + 2, 90, 16 };
+}
+
 void AnalyserPanel::timerCallback() {
     followSettings();
     if (unsaved && juce::Time::getMillisecondCounter() - lastChange > 600) {
@@ -212,14 +252,49 @@ void AnalyserPanel::timerCallback() {
         unsaved = false;
     }
     if (getPeer() != nullptr && !isShowing()) return; // minimised or hidden
-    analyser.process(proc.spectrumTap, proc.currentSampleRate());
+    feedAnalyser(analyser, proc, seenGeneration);
     repaint(plotArea().toNearestInt().expanded(40, 30));
 }
 
 juce::Rectangle<float> AnalyserPanel::plotArea() const {
     return getLocalBounds().toFloat().withTrimmedTop(40).withTrimmedBottom((float)controlsArea.getHeight() + 30).reduced(14, 0)
-        .withTrimmedLeft(30).withTrimmedRight(30);
+        .withTrimmedLeft(30).withTrimmedRight(30 + 22);
 }
+
+// ---------------------------------------------------------------------------
+// The dB range bar on the right, like SPAN's: drag its ends to zoom in or out,
+// the middle to move it, scroll on it to zoom, double-click for the default.
+// ---------------------------------------------------------------------------
+juce::Rectangle<float> AnalyserPanel::rangeBar() const {
+    const auto a = plotArea();
+    return { a.getRight() + 36, a.getY(), 10, a.getHeight() };
+}
+float AnalyserPanel::rangeY(double db) const {
+    const auto b = rangeBar();
+    return b.getY() + (float)((kRangeTop - db) / (kRangeTop - kRangeBottom)) * b.getHeight();
+}
+void AnalyserPanel::setRange(double lo, double hi) {
+    const double span = juce::jlimit(6.0, kRangeTop - kRangeBottom, hi - lo);
+    hi = juce::jlimit(kRangeBottom + span, kRangeTop, hi);
+    lo = hi - span;
+    lo = std::round(lo * 2) / 2;
+    hi = std::round(hi * 2) / 2;
+    change([lo, hi](Settings& s) { s.lo = lo; s.hi = hi; });
+}
+void AnalyserPanel::paintRangeBar(juce::Graphics& g) {
+    const auto b = rangeBar();
+    const auto& s = analyser.settings;
+    g.setColour(juce::Colour(0x14ffffff));
+    g.fillRoundedRectangle(b, 5.0f);
+    const auto thumb = juce::Rectangle<float>(b.getX(), rangeY(s.hi), b.getWidth(), juce::jmax(8.0f, rangeY(s.lo) - rangeY(s.hi)));
+    const bool active = rangeDrag != 0 || overRangeBar;
+    g.setColour(accent.withAlpha(active ? 0.75f : 0.5f));
+    g.fillRoundedRectangle(thumb, 5.0f);
+    g.setColour(Theme::textBright.withAlpha(active ? 0.9f : 0.6f)); // grips at the ends
+    for (float y : { thumb.getY() + 4.0f, thumb.getBottom() - 4.0f })
+        g.drawHorizontalLine((int)y, thumb.getX() + 2.5f, thumb.getRight() - 2.5f);
+}
+
 
 void AnalyserPanel::resized() {
     foldButton.setBounds(getWidth() - 14 - 104, 6, 104, 24);
@@ -256,8 +331,12 @@ void AnalyserPanel::paint(juce::Graphics& g) {
     g.drawText("SPECTRUM", 14, 8, 100, 20, juce::Justification::centredLeft);
     g.setFont(theme.bodyFont(14.0f));
     g.setColour(Theme::soft);
-    g.drawText(analyser.settings.where == 0 ? "Input, before any correction" : "Output, after the correction", 104, 8, 300, 20,
-               juce::Justification::centredLeft);
+    juce::String source = analyser.settings.where == 0 ? "Input, before any correction" : "Output, after the correction";
+    if (proc.analyserHearsSystem())
+        source = !proc.analyserUndoesEq() ? juce::String("What Windows is playing")
+                 : analyser.settings.where == 0 ? juce::String("What Windows plays, before BEQ's EQ")
+                                                : juce::String("What Windows plays, after BEQ's EQ");
+    g.drawText(source, 104, 8, 320, 20, juce::Justification::centredLeft);
 
     const auto a = plotArea();
     const auto& s = analyser.settings;
@@ -292,6 +371,7 @@ void AnalyserPanel::paint(juce::Graphics& g) {
         paintSpectrum(g, a, analyser, accent);
     }
     paintMyEq(g);
+    paintRangeBar(g);
     if (!analyser.hasData()) {
         g.setColour(Theme::soft);
         g.setFont(theme.bodyFont(15.0f));
@@ -319,7 +399,9 @@ void AnalyserPanel::paint(juce::Graphics& g) {
         g.drawText(k.name.toUpperCase(), kb.getCentreX() - 45, kb.getY() - 16, 90, 14, juce::Justification::centred);
         g.setFont(theme.condFont(14.0f));
         g.setColour(Theme::text);
-        g.drawText(k.text(k.knob.getValue()), kb.getCentreX() - 45, kb.getBottom() + 2, 90, 16, juce::Justification::centred);
+        const bool list = &k == &knobs[kSmooth]; // a list too: click the value
+        g.drawText(k.text(k.knob.getValue()) + (list ? juce::String::fromUTF8(" \xe2\x96\xbe") : juce::String()), kb.getCentreX() - 45,
+                   kb.getBottom() + 2, 90, 16, juce::Justification::centred);
     }
 }
 
@@ -417,9 +499,33 @@ void AnalyserPanel::editBand(int i, const std::function<void(bteq::FilterSpec&)>
     repaint();
 }
 
-void AnalyserPanel::mouseDown(const juce::MouseEvent& e) { dragIndex = nodeAt(e.position); repaint(); }
-void AnalyserPanel::mouseUp(const juce::MouseEvent&) { dragIndex = -1; repaint(); }
+void AnalyserPanel::mouseDown(const juce::MouseEvent& e) {
+    if (analyser.settings.open && knobValueArea(kSmooth).contains(e.getPosition())) { showSmoothMenu(); return; }
+    if (rangeBar().expanded(6, 4).contains(e.position)) {
+        const auto& s = analyser.settings;
+        const float yHi = rangeY(s.hi), yLo = rangeY(s.lo), y = e.position.y;
+        rangeDrag = std::abs(y - yHi) < 7 && std::abs(y - yHi) <= std::abs(y - yLo) ? 1 : std::abs(y - yLo) < 7 ? 2 : 3;
+        if (rangeDrag == 3 && (y < yHi || y > yLo)) { // outside the thumb: move it there
+            const double mid = kRangeTop - (y - rangeBar().getY()) / rangeBar().getHeight() * (kRangeTop - kRangeBottom);
+            setRange(mid - (s.hi - s.lo) / 2, mid + (s.hi - s.lo) / 2);
+        }
+        rangeStartLo = analyser.settings.lo;
+        rangeStartHi = analyser.settings.hi;
+        return;
+    }
+    dragIndex = nodeAt(e.position);
+    repaint();
+}
+void AnalyserPanel::mouseUp(const juce::MouseEvent&) { dragIndex = -1; rangeDrag = 0; repaint(); }
 void AnalyserPanel::mouseDrag(const juce::MouseEvent& e) {
+    if (rangeDrag != 0) {
+        const double dbPerPx = (kRangeTop - kRangeBottom) / rangeBar().getHeight() * (e.mods.isShiftDown() ? 0.25 : 1.0);
+        const double d = -(double)e.getDistanceFromDragStartY() * dbPerPx;
+        if (rangeDrag == 1) setRange(rangeStartLo, juce::jmax(rangeStartLo + 6, rangeStartHi + d));
+        else if (rangeDrag == 2) setRange(juce::jmin(rangeStartHi - 6, rangeStartLo + d), rangeStartHi);
+        else setRange(rangeStartLo + d, rangeStartHi + d);
+        return;
+    }
     if (dragIndex < 0) return;
     const double f = freqAt(e.position.x);
     const double db = (plotArea().getCentreY() - e.position.y) / (plotArea().getHeight() * 0.5) * kEqRange;
@@ -430,18 +536,33 @@ void AnalyserPanel::mouseDrag(const juce::MouseEvent& e) {
     mouseX = (float)e.position.x;
 }
 void AnalyserPanel::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& w) {
+    if (rangeBar().expanded(6, 4).contains(e.position) && w.deltaY != 0.0f) { // zoom around the middle
+        const auto& s = analyser.settings;
+        const double mid = (s.lo + s.hi) / 2, half = (s.hi - s.lo) / 2 * (w.deltaY > 0 ? 1 / 1.15 : 1.15);
+        setRange(mid - half, mid + half);
+        return;
+    }
     const int i = nodeAt(e.position);
     if (i < 0 || w.deltaY == 0.0f) return;
     editBand(i, [&](bteq::FilterSpec& b) { b.q = juce::jlimit(0.1, 20.0, std::round(b.q * (w.deltaY > 0 ? 1.1 : 1.0 / 1.1) * 100.0) / 100.0); });
 }
 
 void AnalyserPanel::mouseMove(const juce::MouseEvent& e) {
+    const bool overBar = rangeBar().expanded(6, 4).contains(e.position);
+    if (overBar != overRangeBar) { overRangeBar = overBar; repaint(); }
+    if (overBar) {
+        const auto& s = analyser.settings;
+        const bool end = std::abs(e.position.y - rangeY(s.hi)) < 7 || std::abs(e.position.y - rangeY(s.lo)) < 7;
+        setMouseCursor(end ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::DraggingHandCursor);
+        return;
+    }
     mouseX = (float)e.position.x;
     setMouseCursor(nodeAt(e.position) >= 0 ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::CrosshairCursor);
     repaint();
 }
-void AnalyserPanel::mouseExit(const juce::MouseEvent&) { mouseX = -1; repaint(); }
+void AnalyserPanel::mouseExit(const juce::MouseEvent&) { mouseX = -1; overRangeBar = false; repaint(); }
 void AnalyserPanel::mouseDoubleClick(const juce::MouseEvent& e) {
+    if (rangeBar().expanded(6, 4).contains(e.position)) { rangeDrag = 0; const Settings d; setRange(d.lo, d.hi); return; }
     const int i = nodeAt(e.position);
     if (i >= 0) { editBand(i, [](bteq::FilterSpec& b) { b.enabled = !b.enabled; }); dragIndex = -1; return; }
     if (plotArea().contains(e.position)) { analyser.reset(); repaint(); }

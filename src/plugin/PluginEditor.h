@@ -114,10 +114,10 @@ private:
     BteqProcessor& proc;
     const Theme& theme;
     juce::TextButton advancedButton { "Advanced" }, myEqButton { "My EQ" }, scopeButton;
-    juce::TextButton analyserButton { "Analyser" }, popOutButton { juce::String::fromUTF8("Pop out \xe2\x86\x97") };
+    juce::TextButton analyserButton { "Analyser" }, popOutButton { juce::String::fromUTF8("\xe2\x86\x97") };
     void timerCallback() override;
     std::unique_ptr<bteq::spectrum::Analyser> overlay; // only while the analyser is on
-    int overlayVersion = -1;
+    int overlayVersion = -1, overlayGeneration = -1;
     std::unique_ptr<juce::SharedResourcePointer<CurvesHolder>> curves; // loaded on first use
     enum Curve { Target, Measured, Corrected, Eq, numCurves };
     std::array<juce::Rectangle<float>, numCurves> legendHit;

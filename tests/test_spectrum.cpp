@@ -93,6 +93,28 @@ int main() {
         check(!tap.read(x, 4, 4), "no buffer before a viewer");
         check(!tap.wanted(), "nobody wants it at first");
     }
+    {
+        using bteq::spectrum::smoothIndex;
+        using bteq::spectrum::smoothSteps;
+        check(smoothSteps().size() == 15 && smoothSteps().back().oct == 2.5, "smoothing steps like SPAN, up to 2.5 oct");
+        check(smoothIndex(0) == 0 && smoothIndex(2.0 / 3.0) == 10 && smoothIndex(1.0 / 9.0) == 4, "steps found by value");
+        check(smoothIndex(5.0 / 24.0) == 6, "an old in-between value lands on the nearest step");
+        Settings s;
+        s.smooth = 2.5;
+        check(Settings::fromString(s.toString()).smooth == 2.5, "2.5 oct survives a save");
+    }
+    {
+        const double rate = 48000;
+        Tap tap;
+        tap.addViewer();
+        Analyser a;
+        a.settings.slope = 0;
+        a.settings.smooth = 0;
+        for (int i = 0; i < 20; ++i) { feed(tap, rate, 0.05, 1000, 1.0); a.process(tap, rate); }
+        const double plain = at(a, 1000);
+        a.adjust = [](const std::vector<double>&, std::vector<double>& db) { for (auto& d : db) d -= 6; };
+        check(std::abs(at(a, 1000) - plain + 6) < 0.01, "adjust hook changes the curve");
+    }
     if (failures == 0) std::printf("spectrum: all checks passed\n");
     return failures == 0 ? 0 : 1;
 }
