@@ -120,6 +120,8 @@ input[type=range]:focus { outline: none; }
 
 .level { display: flex; align-items: center; gap: 10px; }
 .level input { flex: 1; height: 18px; }
+.level .auto-value { font: 700 12px "Barlow Condensed", sans-serif; letter-spacing: 0.04em; color: var(--soft); white-space: nowrap; }
+.level .auto-value:empty { display: none; }
 #levelValue { width: 58px; text-align: right; }
 
 .presets { display: flex; gap: 8px; }

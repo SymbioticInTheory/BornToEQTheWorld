@@ -295,8 +295,9 @@ function render() {
   $('level').value = settings.level;
   const headroomDb = settings.headroom ? maxBoostDbFor(settings) : 0;
   $('levelValue').textContent = settings.muted ? 'Muted' : fmt(settings.level) + ' dB';
-  $('levelValue').title = settings.headroom && headroomDb > 0.05
-    ? `Plus ${fmt(-headroomDb)} dB headroom for the EQ's boosts` : '';
+  const autoOn = settings.headroom && headroomDb > 0.05 && !settings.muted;
+  $('autoValue').textContent = autoOn ? fmt(-headroomDb) + ' dB auto' : '';
+  $('autoValue').title = autoOn ? `Auto gain: ${fmt(-headroomDb)} dB more, for the EQ's highest boost` : '';
   $('headroom').classList.toggle('on', settings.headroom);
 
   const sel = $('preset');
