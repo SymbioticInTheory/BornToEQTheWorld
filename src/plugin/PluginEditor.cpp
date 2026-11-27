@@ -270,9 +270,11 @@ void TitleBarLookAndFeel::drawDocumentWindowTitleBar(juce::DocumentWindow&, juce
     g.setColour(juce::Colour(0x1fffffff));
     g.drawHorizontalLine(h - 1, 0.0f, (float)w);
     if (!formula.isValid()) return;
-    // Between the Options button on the left and the window buttons on the right.
+    // Centred on the window, kept clear of the Options button on the left and
+    // the window buttons on the right.
     const int left = juce::jmax(titleSpaceX, 76), right = juce::jmin(titleSpaceX + titleSpaceW, w - 8);
-    const auto area = juce::Rectangle<int>(left, 0, juce::jmax(0, right - left), h).toFloat().reduced(4.0f, h * 0.12f);
+    const int half = juce::jmax(0, juce::jmin(w / 2 - left, right - w / 2));
+    const auto area = juce::Rectangle<int>(w / 2 - half, 0, half * 2, h).toFloat().reduced(4.0f, h * 0.12f);
     // Scaled once per size from the large render, so the thin strokes stay smooth.
     const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
     const float fit = juce::jmin(area.getWidth() / formula.getWidth(), area.getHeight() / formula.getHeight(), 1.0f);
