@@ -1744,15 +1744,22 @@ void BteqEditor::showScaleMenu() {
     const int sizes[] = { 125, 110, 100, 90, 75, 60, 50 };
     for (int pct : sizes)
         menu.addItem(pct, juce::String(pct) + "%", true, juce::roundToInt(proc.uiScale * 100.0f) == pct);
-    static constexpr int kImage = 1001, kForest = 1002;
+    static constexpr int kImage = 1001, kForest = 1002, kBuiltIn = 1010;
+    static const char* builtIn[] = { "Sunset", "Ocean", "Neon", "Moss", "Concrete" };
+    juce::String current;
+    if (auto xml = juce::XmlDocument::parse(settingsFile())) current = xml->getStringAttribute("background");
     menu.addSectionHeader("Background");
-    menu.addItem(kImage, Theme::hasImage ? "Choose another image..." : "Your own image...");
     menu.addItem(kForest, "Forest", true, !Theme::hasImage);
+    for (int i = 0; i < 5; ++i)
+        menu.addItem(kBuiltIn + i, builtIn[i], true, Theme::hasImage && current == builtIn[i]);
+    menu.addItem(kImage, Theme::hasImage && current == "custom" ? "Your own image (choose another)..." : "Your own image...",
+                 true, Theme::hasImage && current == "custom");
     juce::Component::SafePointer<BteqEditor> safe(this);
     menu.showMenuAsync(juce::PopupMenu::Options(), [safe](int id) {
         if (safe == nullptr || id <= 0) return;
         if (id == kImage) { safe->chooseBackground(); return; }
         if (id == kForest) { safe->useForest(); return; }
+        if (id >= kBuiltIn && id < kBuiltIn + 5) { safe->useBuiltInBackground(builtIn[id - kBuiltIn]); return; }
         safe->setUiScale((float)id / 100.0f);
         auto xml = juce::XmlDocument::parse(settingsFile());
         if (xml == nullptr) xml = std::make_unique<juce::XmlElement>("SETTINGS");
@@ -1811,24 +1818,47 @@ void BteqEditor::chooseBackground() {
                                                    "That file couldn't be read as an image.");
             return;
         }
-        // Keep a copy no bigger than the window at 2x, so it loads fast and survives the original moving.
-        const double fit = juce::jmax(2160.0 / img.getWidth(), 1360.0 / img.getHeight());
-        if (fit < 1.0)
-            img = img.rescaled(juce::roundToInt(img.getWidth() * fit), juce::roundToInt(img.getHeight() * fit),
-                               juce::Graphics::highResamplingQuality);
-        backgroundFile().getParentDirectory().createDirectory();
+        safe->storeBackground(img, "custom");
+    });
+}
+
+void BteqEditor::useBuiltInBackground(const juce::String& name) {
+    int size = 0;
+    const char* data = BinaryData::getNamedResource((name.toLowerCase() + "_jpg").toRawUTF8(), size);
+    if (data == nullptr) return;
+    storeBackground(juce::ImageFileFormat::loadFrom(data, (size_t)size), name);
+}
+
+// Keeps a copy no bigger than the window at 2x (so it loads fast and survives the
+// original moving), notes which one it is, and switches to its colours.
+void BteqEditor::storeBackground(const juce::Image& source, const juce::String& name) {
+    auto img = source;
+    if (!img.isValid()) return;
+    const double fit = juce::jmax(2160.0 / img.getWidth(), 1360.0 / img.getHeight());
+    if (fit < 1.0)
+        img = img.rescaled(juce::roundToInt(img.getWidth() * fit), juce::roundToInt(img.getHeight() * fit),
+                           juce::Graphics::highResamplingQuality);
+    backgroundFile().getParentDirectory().createDirectory();
+    {
         juce::FileOutputStream out(backgroundFile());
         if (!out.openedOk() || !out.setPosition(0) || !out.truncate().wasOk()) return;
         juce::PNGImageFormat().writeImageToStream(img.convertedToFormat(juce::Image::RGB), out);
-        out.flush();
-        safe->loadBackground();
-        safe->setAccent(Theme::imageAccent); // show the picked colour straight away
-        safe->backgroundChanged();
-    });
+    }
+    auto xml = juce::XmlDocument::parse(settingsFile());
+    if (xml == nullptr) xml = std::make_unique<juce::XmlElement>("SETTINGS");
+    xml->setAttribute("background", name);
+    xml->writeTo(settingsFile());
+    loadBackground();
+    setAccent(Theme::imageAccent); // show the picked colour straight away
+    backgroundChanged();
 }
 
 void BteqEditor::useForest() {
     backgroundFile().deleteFile();
+    if (auto xml = juce::XmlDocument::parse(settingsFile())) {
+        xml->removeAttribute("background");
+        xml->writeTo(settingsFile());
+    }
     loadBackground();
     if (proc.accentIndex == Theme::imageAccent) setAccent(0);
     backgroundChanged();

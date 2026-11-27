@@ -143,8 +143,8 @@ export async function imageFromFile(file) {
 
 // ---------------------------------------------------------------- applying it
 export async function loadTheme() {
-  const s = await chrome.storage.local.get(['accent', 'bgImage', 'imageColours']);
-  const image = s.bgImage && s.imageColours ? { dataUrl: s.bgImage, colours: s.imageColours } : null;
+  const s = await chrome.storage.local.get(['accent', 'bgImage', 'imageColours', 'bgName']);
+  const image = s.bgImage && s.imageColours ? { dataUrl: s.bgImage, colours: s.imageColours, name: s.bgName || 'custom' } : null;
   let accent = s.accent ?? 0;
   if (accent === IMAGE_ACCENT && !image) accent = 0;
   return { accent, image };

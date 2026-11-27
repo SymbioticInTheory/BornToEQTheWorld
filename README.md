@@ -30,12 +30,14 @@ Step 1 (DSP core) is done. Step 2 (headphone library) is in progress.
 
 ## Your own background
 
-Right-click anywhere in the plugin or standalone and pick **Background > Your
-own image...**. BEQ keeps a copy next to `settings.xml` (in
+Right-click anywhere in the plugin or standalone and pick a **Background**:
+Forest, five built-in ones (Sunset, Ocean, Neon, Moss, Concrete, drawn by
+`tools/make_backgrounds.py`), or **Your own image...**. BEQ keeps a copy next
+to `settings.xml` (in
 `%APPDATA%/Born To EQ The World`) and picks its colours from it
 (`src/plugin/ImageTheme.h`): an accent for a fifth colour dot, a tint for the
 haze over the image, and advanced-view curve colours that stay clear of the
-accent. **Forest** goes back to the original.
+accent. **Forest** is the original.
 
 ## Build and test
 

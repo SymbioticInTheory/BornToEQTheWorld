@@ -215,6 +215,8 @@ private:
     static juce::File backgroundFile();
     void loadBackground();
     void chooseBackground();
+    void useBuiltInBackground(const juce::String& name); // Sunset, Ocean, ... (made by tools/make_backgrounds.py)
+    void storeBackground(const juce::Image& img, const juce::String& name);
     void useForest();
     void backgroundChanged();
     void timerCallback() override;

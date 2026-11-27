@@ -33,8 +33,15 @@
   <div id="themeNote" class="status"></div>
   <footer>
     <div id="swatches" class="swatches"></div>
-    <button id="image" class="pill small" title="Use your own background image; BEQ picks its colours from it">Your image</button>
-    <button id="forest" class="pill small" title="Back to the forest background" hidden>Forest</button>
+    <select id="background" title="Background. BEQ picks its colours from it and adds them as the last dot">
+      <option value="forest">Forest</option>
+      <option value="Sunset">Sunset</option>
+      <option value="Ocean">Ocean</option>
+      <option value="Neon">Neon</option>
+      <option value="Moss">Moss</option>
+      <option value="Concrete">Concrete</option>
+      <option value="custom">Your own image...</option>
+    </select>
     <input id="imageFile" type="file" accept="image/*" hidden>
     <div class="lagrangian" title="The Standard Model"></div>
   </footer>

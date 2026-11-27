@@ -258,29 +258,39 @@ function buildSwatches() {
 
 function applyTheme() {
   paintTheme(theme, $('title'), $('swatches'));
-  $('forest').hidden = !theme.image;
-  $('image').textContent = theme.image ? 'Other image' : 'Your image';
+  $('background').value = theme.image ? (theme.image.name || 'custom') : 'forest';
 }
 
-// Your own background image: its colours become the fifth swatch, picked straight away.
-function buildImageButtons() {
-  const input = $('imageFile');
-  $('image').addEventListener('click', () => input.click());
+// Backgrounds: the forest, five built-in ones (tools/make_backgrounds.py), or your
+// own image. Their colours become the last swatch, picked straight away.
+function buildBackgroundMenu() {
+  const sel = $('background'), input = $('imageFile');
+  const note = (text) => {
+    $('themeNote').textContent = text;
+    setTimeout(() => { $('themeNote').textContent = ''; }, 4000);
+  };
+  const use = async (blob, name) => {
+    const { dataUrl, colours } = await imageFromFile(blob);
+    await chrome.storage.local.set({ bgImage: dataUrl, imageColours: colours, bgName: name, accent: IMAGE_ACCENT });
+  };
+  sel.addEventListener('change', async () => {
+    const v = sel.value;
+    applyTheme(); // the menu shows the current background until a new one is in place
+    if (v === 'custom') { input.click(); return; }
+    if (v === 'forest') {
+      await chrome.storage.local.remove(['bgImage', 'imageColours', 'bgName']);
+      if (theme.accent === IMAGE_ACCENT) await chrome.storage.local.set({ accent: 0 });
+      return;
+    }
+    try {
+      await use(await (await fetch(`assets/backgrounds/${v.toLowerCase()}.jpg`)).blob(), v);
+    } catch (e) { note("Couldn't load that background."); }
+  });
   input.addEventListener('change', async () => {
     const file = input.files && input.files[0];
     input.value = '';
     if (!file) return;
-    try {
-      const { dataUrl, colours } = await imageFromFile(file);
-      await chrome.storage.local.set({ bgImage: dataUrl, imageColours: colours, accent: IMAGE_ACCENT });
-    } catch (e) {
-      $('themeNote').textContent = "That file couldn't be used as an image.";
-      setTimeout(() => { $('themeNote').textContent = ''; }, 4000);
-    }
-  });
-  $('forest').addEventListener('click', async () => {
-    await chrome.storage.local.remove(['bgImage', 'imageColours']);
-    if (theme.accent === IMAGE_ACCENT) await chrome.storage.local.set({ accent: 0 });
+    try { await use(file, 'custom'); } catch (e) { note("That file couldn't be used as an image."); }
   });
 }
 
@@ -293,13 +303,13 @@ async function init() {
   profiles = s.profiles || {};
   lastSettings = s.lastSettings || null;
   buildSwatches();
-  buildImageButtons();
+  buildBackgroundMenu();
   buildKnob();
   applyTheme();
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local') {
-      if (changes.accent || changes.bgImage || changes.imageColours)
+      if (changes.accent || changes.bgImage || changes.imageColours || changes.bgName)
         loadTheme().then((t) => { theme = t; applyTheme(); });
       if (changes.lastSettings) lastSettings = changes.lastSettings.newValue || null;
       if (changes.profiles) {

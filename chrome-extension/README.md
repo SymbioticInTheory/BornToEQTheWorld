@@ -21,9 +21,10 @@ No headphone correction: just tone and volume, per tab.
   tab by the EQ's highest boost so boosts can't clip.
 - Pick a standard preset, or **Save** your own profiles (kept in Chrome).
 - The dots pick the colour, like in the plugin.
-- **Your image** (at the bottom of the mixer) uses your own background image
-  in the popup and the mixer. BEQ picks the colours from it (`theme.js`, the
-  same way as the plugin) and adds them as a fifth dot. **Forest** goes back.
+- The background menu (at the bottom of the mixer) picks the Forest, one of
+  five built-in backgrounds, or **Your own image...**, for the popup and the
+  mixer. BEQ picks the colours from it (`theme.js`, the same way as the
+  plugin) and adds them as a fifth dot.
 
 ## Mixer
 
