@@ -11,7 +11,7 @@ LibraryHolder::LibraryHolder() {
     juce::GZIPDecompressorInputStream gz(&compressed, false, juce::GZIPDecompressorInputStream::gzipFormat);
     juce::MemoryBlock text;
     gz.readIntoMemoryBlock(text);
-    loaded = library.loadFromText(std::string(static_cast<const char*>(text.getData()), text.getSize()));
+    loaded = library.loadFromText(static_cast<const char*>(text.getData()), text.getSize());
 }
 
 CurvesHolder::CurvesHolder() {
@@ -352,6 +352,7 @@ void BteqProcessor::computeMatch() {
     match.source = juce::String(best->source) + (best->rig.empty() ? "" : " (" + juce::String(best->rig) + ")");
     match.sameRig = best->source == ownSource && best->rig == ownRig;
     match.active = true;
+    curvesHolder.reset(); // everything needed is copied; free the curves unless a window is showing them
 }
 
 juce::String BteqProcessor::editKey() const {
@@ -369,7 +370,7 @@ const bteq::HeadphoneProfile* BteqProcessor::selectedProfile() const {
 bool BteqProcessor::graphicAvailable() const {
     if (match.active) return true;
     const auto* p = selectedProfile();
-    return p != nullptr && !p->graphicGainsDb.empty() && !holder->library.graphicFrequencies().empty();
+    return p != nullptr && p->hasGraphic() && !holder->library.graphicFrequencies().empty();
 }
 
 bool BteqProcessor::graphicModeActive() const {
@@ -401,7 +402,11 @@ double BteqProcessor::publishedPreampDb() const {
     if (p == nullptr) return 0;
     if (match.active) return match.preampDb;
     if (p->hasParametric) return p->parametric.preampDb;
-    if (!p->graphicGainsDb.empty()) return *std::max_element(p->graphicGainsDb.begin(), p->graphicGainsDb.end());
+    if (p->hasGraphic()) {
+        float mx = p->graphicDb(0);
+        for (size_t i = 1; i < p->graphicSize(); ++i) mx = std::max(mx, p->graphicDb(i));
+        return mx;
+    }
     return 0;
 }
 
@@ -426,8 +431,8 @@ std::vector<double> BteqProcessor::graphicShapeDb() const {
     if (match.active) return match.shape;
     const double pre = publishedPreampDb();
     std::vector<double> shape;
-    shape.reserve(p->graphicGainsDb.size());
-    for (const auto g : p->graphicGainsDb) shape.push_back((double)g - pre);
+    shape.reserve(p->graphicSize());
+    for (size_t i = 0; i < p->graphicSize(); ++i) shape.push_back((double)p->graphicDb(i) - pre);
     return shape;
 }
 

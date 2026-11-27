@@ -31,6 +31,7 @@ struct Theme {
     static constexpr int numAccents = 5, numBuiltIn = 4, imageAccent = 4;
     // Set from the background image (see ImageTheme.h); shared by every open window.
     static inline bool hasImage = false, imageVivid = true;
+    static inline bool lowMemory = false; // no background picture (settings.xml lowMemory)
     static inline juce::Colour imageColour { 0xffD9D5CD }, imageMeasured { 0xff4F86D6 }, imageEq { 0xffD2607E },
         fog { 0xff0A0B0C };
 
@@ -220,6 +221,7 @@ private:
     void storeBackground(const juce::Image& img, const juce::String& name);
     void useForest();
     void backgroundChanged();
+    void setLowMemory(bool on);
     void timerCallback() override;
     void refreshHeadphones();
     void refreshTargets();
