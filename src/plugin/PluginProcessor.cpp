@@ -77,6 +77,156 @@ BteqProcessor::ProfileEdit readEdit(const juce::ValueTree& t) {
 }
 } // namespace
 
+// ---------------------------------------------------------------------------
+// Your own presets
+// ---------------------------------------------------------------------------
+juce::File CustomPresetStore::file() {
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("Born To EQ The World")
+        .getChildFile("custom-presets.xml");
+}
+
+namespace {
+bteq::HeadphoneProfile makeCustom(const std::string& headphone, const std::string& name, const bteq::ParametricPreset& preset) {
+    bteq::HeadphoneProfile p;
+    p.name = headphone;
+    p.source = CustomPresetStore::kSource;
+    p.originalPreset = true;
+    p.target = name;
+    p.hasParametric = true;
+    p.parametric = preset;
+    return p;
+}
+} // namespace
+
+CustomPresetStore::CustomPresetStore() {
+    if (auto xml = juce::XmlDocument::parse(file()))
+        for (auto* e : xml->getChildWithTagNameIterator("PRESET")) {
+            bteq::ParametricPreset preset;
+            preset.preampDb = e->getDoubleAttribute("preamp");
+            preset.filters = filtersFromString(e->getStringAttribute("filters"));
+            presets.push_back(makeCustom(e->getStringAttribute("headphone").toStdString(),
+                                         e->getStringAttribute("name").toStdString(), preset));
+        }
+}
+
+bteq::HeadphoneProfile* CustomPresetStore::find(const std::string& headphone, const std::string& name) {
+    for (auto& p : presets)
+        if (p.name == headphone && p.target == name) return &p;
+    return nullptr;
+}
+
+void CustomPresetStore::save() const {
+    juce::XmlElement xml("CUSTOMPRESETS");
+    for (const auto& p : presets) {
+        auto* e = xml.createNewChildElement("PRESET");
+        e->setAttribute("headphone", juce::String(p.name));
+        e->setAttribute("name", juce::String(p.target));
+        e->setAttribute("preamp", p.parametric.preampDb);
+        e->setAttribute("filters", filtersToString(p.parametric.filters));
+    }
+    file().getParentDirectory().createDirectory();
+    xml.writeTo(file());
+}
+
+std::vector<const bteq::HeadphoneProfile*> BteqProcessor::profilesFor(const juce::String& headphone) const {
+    std::vector<const bteq::HeadphoneProfile*> out;
+    if (headphone.isEmpty() || !holder->loaded) return out;
+    const auto name = headphone.toStdString();
+    if (const auto idx = holder->library.headphoneIndex(name)) out = holder->library.profilesFor(*idx);
+    for (const auto& c : customs->presets)
+        if (c.name == name) out.push_back(&c);
+    return out;
+}
+
+bool BteqProcessor::selectedIsCustom() const { return isCustom(selectedProfile()); }
+
+bteq::HeadphoneProfile* BteqProcessor::selectedCustom() {
+    const auto* p = selectedProfile();
+    return isCustom(p) && !match.active ? const_cast<bteq::HeadphoneProfile*>(p) : nullptr;
+}
+
+juce::String BteqProcessor::uniqueCustomName(const juce::String& wanted, const bteq::HeadphoneProfile* except) const {
+    const auto base = wanted.trim().isEmpty() ? juce::String("My preset") : wanted.trim();
+    auto taken = [&](const juce::String& n) {
+        for (const auto& c : customs->presets)
+            if (&c != except && c.name == headphoneName.toStdString() && c.target == n.toStdString()) return true;
+        return false;
+    };
+    auto name = base;
+    for (int i = 2; taken(name); ++i) name = base + " " + juce::String(i);
+    return name;
+}
+
+juce::String BteqProcessor::addCustomPreset(const juce::String& wanted, const bteq::ParametricPreset& preset) {
+    const juce::ScopedLock sl(buildLock);
+    if (headphoneName.isEmpty()) return {};
+    const auto name = uniqueCustomName(wanted, nullptr);
+    customs->presets.push_back(makeCustom(headphoneName.toStdString(), name.toStdString(), preset));
+    customs->save();
+    const auto profs = profilesFor(headphoneName);
+    profileIndex = (int)profs.size() - 1;
+    matchName.clear();
+    computeMatch();
+    rebuild(false);
+    return name;
+}
+
+void BteqProcessor::renameCustomPreset(int index, const juce::String& wanted) {
+    const juce::ScopedLock sl(buildLock);
+    const auto profs = profilesFor(headphoneName);
+    if (index < 0 || index >= (int)profs.size() || !isCustom(profs[(size_t)index])) return;
+    auto* c = const_cast<bteq::HeadphoneProfile*>(profs[(size_t)index]);
+    const auto oldKey = profileKey(*c);
+    c->target = uniqueCustomName(wanted, c).toStdString();
+    const auto newKey = profileKey(*c);
+    // Its own My EQ (per-target mode) follows the new name.
+    if (auto it = myEqByTarget.find(oldKey); it != myEqByTarget.end()) {
+        myEqByTarget[newKey] = it->second;
+        myEqByTarget.erase(oldKey);
+    }
+    if (myEqKey == oldKey) myEqKey = newKey;
+    customs->save();
+}
+
+void BteqProcessor::deleteCustomPreset(int index) {
+    const juce::ScopedLock sl(buildLock);
+    const auto profs = profilesFor(headphoneName);
+    if (index < 0 || index >= (int)profs.size() || !isCustom(profs[(size_t)index])) return;
+    const auto* doomed = profs[(size_t)index];
+    if (index == profileIndex) profileIndex = 0;
+    else if (index < profileIndex) --profileIndex;
+    customs->presets.remove_if([doomed](const bteq::HeadphoneProfile& p) { return &p == doomed; });
+    customs->save();
+    builtProfile = nullptr;
+    computeMatch();
+    rebuild(false);
+}
+
+void BteqProcessor::writeCustom(juce::ValueTree& t) const {
+    const auto* p = selectedProfile();
+    if (!isCustom(p)) return;
+    juce::ValueTree c("CUSTOM");
+    c.setProperty("headphone", juce::String(p->name), nullptr);
+    c.setProperty("name", juce::String(p->target), nullptr);
+    c.setProperty("preamp", p->parametric.preampDb, nullptr);
+    c.setProperty("filters", filtersToString(p->parametric.filters), nullptr);
+    t.appendChild(c, nullptr);
+}
+
+void BteqProcessor::readCustom(const juce::ValueTree& t) {
+    const auto c = t.getChildWithName("CUSTOM");
+    if (!c.isValid()) return;
+    const auto headphone = c.getProperty("headphone").toString().toStdString();
+    const auto name = c.getProperty("name").toString().toStdString();
+    if (headphone.empty() || name.empty() || customs->find(headphone, name) != nullptr) return;
+    bteq::ParametricPreset preset;
+    preset.preampDb = (double)c.getProperty("preamp", 0.0);
+    preset.filters = filtersFromString(c.getProperty("filters").toString());
+    customs->presets.push_back(makeCustom(headphone, name, preset));
+    customs->save();
+}
+
 BteqProcessor::BteqProcessor()
     : AudioProcessor(BusesProperties()
                          .withInput("Input", juce::AudioChannelSet::stereo(), true)
@@ -91,7 +241,10 @@ BteqProcessor::BteqProcessor()
     startTimerHz(30);
 }
 
-BteqProcessor::~BteqProcessor() { stopTimer(); }
+BteqProcessor::~BteqProcessor() {
+    stopTimer();
+    if (customsDirty) customs->save();
+}
 
 juce::AudioProcessorValueTreeState::ParameterLayout BteqProcessor::createLayout() {
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
@@ -208,10 +361,7 @@ juce::String BteqProcessor::editKey() const {
 }
 
 const bteq::HeadphoneProfile* BteqProcessor::selectedProfile() const {
-    if (headphoneName.isEmpty() || !holder->loaded) return nullptr;
-    const auto idx = holder->library.headphoneIndex(headphoneName.toStdString());
-    if (!idx) return nullptr;
-    const auto profs = holder->library.profilesFor(*idx);
+    const auto profs = profilesFor(headphoneName);
     if (profs.empty()) return nullptr;
     return profs[static_cast<size_t>(juce::jlimit(0, (int)profs.size() - 1, profileIndex))];
 }
@@ -288,6 +438,14 @@ bool BteqProcessor::selectionEdited() const {
 
 void BteqProcessor::setFilter(int index, const bteq::FilterSpec& spec) {
     const juce::ScopedLock sl(buildLock);
+    if (auto* c = selectedCustom()) { // your own preset: change it directly
+        if (index < 0 || index >= (int)c->parametric.filters.size()) return;
+        c->parametric.filters[(size_t)index] = spec;
+        customsDirty = true;
+        ++editVersion;
+        rebuild(false);
+        return;
+    }
     const auto* p = selectedProfile();
     if (p == nullptr || !p->hasParametric || match.active) return;
     auto& e = edits[profileKey(*p)];
@@ -303,6 +461,13 @@ void BteqProcessor::setFilter(int index, const bteq::FilterSpec& spec) {
 
 void BteqProcessor::setPreamp(double db) {
     const juce::ScopedLock sl(buildLock);
+    if (auto* c = selectedCustom()) {
+        c->parametric.preampDb = juce::jlimit(-30.0, 12.0, db);
+        customsDirty = true;
+        ++editVersion;
+        rebuild(false);
+        return;
+    }
     const auto* p = selectedProfile();
     if (p == nullptr) return;
     auto& e = edits[editKey()];
@@ -442,6 +607,11 @@ bool BteqProcessor::myEqActive() const {
 void BteqProcessor::timerCallback() {
     rebuild(false);
     freeAllRetired();
+    // Your presets are written to disk once a drag has settled, not on every step.
+    if (customsDirty && !juce::ModifierKeys::currentModifiers.isAnyMouseButtonDown()) {
+        customsDirty = false;
+        customs->save();
+    }
     updateApo();
 }
 
@@ -809,6 +979,7 @@ void BteqProcessor::getStateInformation(juce::MemoryBlock& destData) {
             list.appendChild(t, nullptr);
         }
         state.appendChild(list, nullptr);
+        writeCustom(state);
     }
     if (auto xml = state.createXml()) copyXmlToBinary(*xml, destData);
 }
@@ -821,6 +992,8 @@ void BteqProcessor::setStateInformation(const void* data, int sizeInBytes) {
     state.removeChild(list, nullptr);
     const auto otherMyEqs = state.getChildWithName("MYEQS");
     state.removeChild(otherMyEqs, nullptr);
+    readCustom(state);
+    state.removeChild(state.getChildWithName("CUSTOM"), nullptr);
     params.replaceState(state);
     {
         const juce::ScopedLock sl(buildLock);
@@ -858,11 +1031,9 @@ void BteqProcessor::setStateInformation(const void* data, int sizeInBytes) {
 }
 
 int BteqProcessor::indexForKey(const juce::String& headphone, const juce::String& key) const {
-    if (const auto idx = holder->library.headphoneIndex(headphone.toStdString())) {
-        const auto profs = holder->library.profilesFor(*idx);
-        for (size_t i = 0; i < profs.size(); ++i)
-            if (profileKey(*profs[i]) == key) return (int)i;
-    }
+    const auto profs = profilesFor(headphone);
+    for (size_t i = 0; i < profs.size(); ++i)
+        if (profileKey(*profs[i]) == key) return (int)i;
     return 0;
 }
 
@@ -876,6 +1047,7 @@ juce::ValueTree BteqProcessor::makeSnapshot() const {
     t.setProperty("match", matchName, nullptr);
     if (const auto* e = currentEdit()) writeEdit(t, *e);
     writeMyEq(t, myEq());
+    writeCustom(t);
     return t;
 }
 
@@ -886,6 +1058,7 @@ void BteqProcessor::loadSnapshot(const juce::ValueTree& t) {
     setParam(kMode, (float)(int)t.getProperty("mode", 0));
     setParam(kAmount, (float)(double)t.getProperty("amount", 100.0));
     const juce::ScopedLock sl(buildLock);
+    readCustom(t);
     headphoneName = t.getProperty("headphone").toString();
     profileIndex = indexForKey(headphoneName, t.getProperty("profile").toString());
     matchName = t.getProperty("match").toString();

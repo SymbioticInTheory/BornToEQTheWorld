@@ -242,6 +242,51 @@ void BteqLookAndFeel::drawScrollbar(juce::Graphics& g, juce::ScrollBar&, int x, 
 // ===========================================================================
 // Response graph
 // ===========================================================================
+TitleBarLookAndFeel::TitleBarLookAndFeel(const Theme& t) : BteqLookAndFeel(t), font(t) {
+    formula = juce::ImageCache::getFromMemory(BinaryData::lagrangian_png, BinaryData::lagrangian_pngSize);
+    // The minimise and close buttons fill with this colour.
+    auto scheme = getCurrentColourScheme();
+    scheme.setUIColour(juce::LookAndFeel_V4::ColourScheme::widgetBackground, juce::Colours::black);
+    setColourScheme(scheme);
+}
+
+void TitleBarLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, const juce::Colour&, bool over, bool) {
+    const auto r = b.getLocalBounds().toFloat().reduced(0.5f);
+    g.setColour(over ? juce::Colour(0x1fffffff) : juce::Colours::black);
+    g.fillRoundedRectangle(r, r.getHeight() * 0.5f);
+    g.setColour(juce::Colour(0x33ffffff));
+    g.drawRoundedRectangle(r, r.getHeight() * 0.5f, 1.0f);
+}
+
+void TitleBarLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& b, bool, bool) {
+    g.setColour(Theme::soft);
+    g.setFont(font.labelFont(11.0f));
+    g.drawText(b.getButtonText().toUpperCase(), b.getLocalBounds(), juce::Justification::centred, false);
+}
+
+void TitleBarLookAndFeel::drawDocumentWindowTitleBar(juce::DocumentWindow&, juce::Graphics& g, int w, int h, int titleSpaceX,
+                                                     int titleSpaceW, const juce::Image*, bool) {
+    g.fillAll(juce::Colours::black);
+    g.setColour(juce::Colour(0x1fffffff));
+    g.drawHorizontalLine(h - 1, 0.0f, (float)w);
+    if (!formula.isValid()) return;
+    // Centred on the window, kept clear of the Options button on the left and
+    // the window buttons on the right.
+    const int left = juce::jmax(titleSpaceX, 76), right = juce::jmin(titleSpaceX + titleSpaceW, w - 8);
+    const int half = juce::jmax(0, juce::jmin(w / 2 - left, right - w / 2));
+    const auto area = juce::Rectangle<int>(w / 2 - half, 0, half * 2, h).toFloat().reduced(4.0f, h * 0.12f);
+    // Scaled once per size from the large render, so the thin strokes stay smooth.
+    const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
+    const float fit = juce::jmin(area.getWidth() / formula.getWidth(), area.getHeight() / formula.getHeight(), 1.0f);
+    const int pw = juce::jmax(1, juce::roundToInt(formula.getWidth() * fit * scale)),
+              ph = juce::jmax(1, juce::roundToInt(formula.getHeight() * fit * scale));
+    if (scaled.getWidth() != pw || scaled.getHeight() != ph)
+        scaled = formula.rescaled(pw, ph, juce::Graphics::highResamplingQuality);
+    const auto dest = juce::Rectangle<float>(pw / scale, ph / scale).withCentre(area.getCentre());
+    g.setColour(accentColour.brighter(0.25f)); // a touch brighter: thin strokes on black
+    g.drawImage(scaled, dest, juce::RectanglePlacement::stretchToFit, true);
+}
+
 ResponseGraph::ResponseGraph(BteqProcessor& p, const Theme& t) : proc(p), theme(t) {
     advancedButton.getProperties().set("kind", "pill");
     advancedButton.setClickingTogglesState(true);
@@ -624,6 +669,19 @@ void ResponseGraph::mouseDown(const juce::MouseEvent& e) {
     repaint();
 }
 
+void ResponseGraph::mouseDoubleClick(const juce::MouseEvent& e) {
+    const int i = nodeAt(e.position);
+    if (i < 0) return;
+    double k = 1.0;
+    auto filters = nodeFilters(k);
+    auto f = filters[(size_t)i];
+    f.enabled = !f.enabled;
+    setNodeFilter(i, f);
+    dragIndex = -1;
+    repaint();
+    if (auto* parent = getParentComponent()) parent->repaint();
+}
+
 void ResponseGraph::mouseDrag(const juce::MouseEvent& e) {
     if (dragIndex < 0) return;
     double k = 1.0;
@@ -665,9 +723,17 @@ FiltersPanel::FiltersPanel(BteqProcessor& p, const Theme& t) : proc(p), theme(t)
             l.setBorderSize({ 0, 0, 0, 0 });
             l.setMinimumHorizontalScale(1.0f);
             l.setEditable(true, false, false);
-            l.setMouseCursor(juce::MouseCursor::IBeamCursor);
+            l.setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
             l.setTitle("Filter " + juce::String(i + 1) + (fi == Freq ? " frequency" : fi == Gain ? " gain" : " Q"));
+            l.setTooltip("Drag up or down to change it (hold Shift for fine steps), or click to type a value");
             l.onTextChange = [this, i, fi, &l] { commit(i, (Field)fi, l.getText()); };
+            l.onDragStart = [this, i, fi] {
+                const auto shown = shownFilters();
+                if (i >= (int)shown.size()) return;
+                const auto& f = shown[(size_t)i];
+                dragPosition = fi == Freq ? std::log2(f.fc) : fi == Gain ? f.gainDb : std::log2(f.q);
+            };
+            l.onDrag = [this, i, fi](int up, bool fine) { dragValue(i, (Field)fi, up, fine); };
             addChildComponent(l);
         }
     myEqOnButton.getProperties().set("kind", "pill");
@@ -738,11 +804,12 @@ void FiltersPanel::mouseDown(const juce::MouseEvent& e) {
             getParentComponent()->repaint();
             return;
         }
-        if (!proc.editingMyEq) return;
+        if (!proc.editingMyEq && !proc.selectedIsCustom()) return; // the type can change in My EQ and your own presets
         using T = bteq::FilterType;
         f.type = f.type == T::Peaking ? T::LowShelf : f.type == T::LowShelf ? T::HighShelf : T::Peaking;
         if (f.type != T::Peaking && f.q > 2.0) f.q = 0.7;
-        proc.setMyEqBand(i, f);
+        if (proc.editingMyEq) proc.setMyEqBand(i, f);
+        else proc.setFilter(i, f);
         refresh();
         getParentComponent()->repaint();
         return;
@@ -800,6 +867,31 @@ void FiltersPanel::refresh() {
             l.setEditable(!(lowPass && fi == Gain), false, false);
         }
     }
+}
+
+// Frequency: 100 pixels per octave. Gain: 20 pixels per dB. Q: 150 pixels per
+// doubling. Shift makes each step five times finer.
+void FiltersPanel::dragValue(int card, Field field, int pixelsUp, bool fine) {
+    auto filters = shownFilters();
+    if (card >= (int)filters.size()) return;
+    auto f = filters[(size_t)card];
+    const double step = (fine ? 0.2 : 1.0) * pixelsUp;
+    if (field == Freq) {
+        dragPosition = juce::jlimit(std::log2(10.0), std::log2(22000.0), dragPosition + step / 100.0);
+        const double fc = std::pow(2.0, dragPosition);
+        f.fc = fc < 100 ? std::round(fc * 10.0) / 10.0 : std::round(fc);
+    } else if (field == Gain) {
+        if (f.type == bteq::FilterType::LowPass) return;
+        dragPosition = juce::jlimit(-30.0, 30.0, dragPosition + step * 0.05);
+        f.gainDb = std::round(dragPosition * 10.0) / 10.0;
+    } else {
+        dragPosition = juce::jlimit(std::log2(0.05), std::log2(30.0), dragPosition + step / 150.0);
+        f.q = std::round(std::pow(2.0, dragPosition) * 100.0) / 100.0;
+    }
+    if (proc.editingMyEq) proc.setMyEqBand(card, f);
+    else proc.setFilter(card, f);
+    refresh();
+    getParentComponent()->repaint();
 }
 
 void FiltersPanel::commit(int card, Field field, const juce::String& text) {
@@ -890,7 +982,7 @@ void FiltersPanel::paint(juce::Graphics& g) {
         g.setFont(theme.condFont(13.0f));
         g.setColour(accent.interpolatedWith(Theme::text, 0.25f));
         if (!f.enabled) g.setOpacity(0.4f);
-        if (proc.editingMyEq) {
+        if (proc.editingMyEq || proc.selectedIsCustom()) {
             // The type can be changed: draw it as a small switch.
             const auto chip = top.removeFromRight(juce::GlyphArrangement::getStringWidth(g.getCurrentFont(), type) + 14);
             g.setColour(juce::Colour(0x1fffffff));
@@ -916,7 +1008,7 @@ void FiltersPanel::paint(juce::Graphics& g) {
                        juce::Justification::centredLeft, true);
         return;
     }
-    hint = "Click a number to switch a filter off, a value to type it; drag or scroll points on the graph";
+    hint = "Number: on/off. Value: drag up or down, or click to type. Graph point: drag, scroll for Q, double-click on/off";
     if (fs.size() > (size_t)maxCards) hint = "+" + juce::String((int)fs.size() - maxCards) + " more filters. " + hint;
     g.drawText(hint, footer.withTrimmedRight(70), juce::Justification::centredLeft, true);
 }
@@ -1191,13 +1283,30 @@ BteqEditor::BteqEditor(BteqProcessor& p)
     startTimerHz(15);
 }
 
-BteqEditor::~BteqEditor() { setLookAndFeel(nullptr); }
+BteqEditor::~BteqEditor() {
+    if (titleWindow != nullptr) titleWindow->setLookAndFeel(nullptr);
+    setLookAndFeel(nullptr);
+}
+
+// Standalone: the window around the editor gets the black Lagrangian title bar.
+void BteqEditor::styleTitleBar() {
+    if (!proc.standaloneUi || titleWindow != nullptr) return;
+    if (auto* w = dynamic_cast<juce::DocumentWindow*>(getTopLevelComponent())) {
+        titleLnf.accentColour = Theme::accent(proc.accentIndex);
+        titleWindow = w;
+        w->setLookAndFeel(&titleLnf);
+        w->setBackgroundColour(juce::Colours::black);
+        w->repaint();
+    }
+}
 
 void BteqEditor::setAccent(int index) {
     proc.accentIndex = juce::jlimit(0, Theme::numAccents - 1, index);
     lnf.accentColour = graph.accent = filters.accent = Theme::accent(proc.accentIndex);
     titleImage = makeDeathTitle(*theme, Theme::accent(proc.accentIndex), 3.0f, titleArea);
     swatches[(size_t)proc.accentIndex].setToggleState(true, juce::dontSendNotification);
+    titleLnf.accentColour = Theme::accent(proc.accentIndex);
+    if (titleWindow != nullptr) titleWindow->repaint();
     content.repaint();
 }
 
@@ -1220,11 +1329,12 @@ void BteqEditor::refreshTargets() {
         targetRows.push_back({ true, "Sound like another headphone", -1 });
         targetRows.push_back({ false, proc.matchedHeadphone().isNotEmpty() ? proc.matchedHeadphone()
                                                                            : juce::String("Choose a headphone..."), kMatchRow });
-        const auto profs = proc.library().profilesFor(*idx);
+        const auto profs = proc.profilesFor(shownHeadphone);
         juce::String lastHeading;
         for (size_t i = 0; i < profs.size(); ++i) {
             const auto* pr = profs[i];
-            const juce::String heading = pr->originalPreset ? juce::String(pr->source) + "'s own presets"
+            const juce::String heading = BteqProcessor::isCustom(pr) ? juce::String("Your presets")
+                                       : pr->originalPreset ? juce::String(pr->source) + "'s own presets"
                                                             : juce::String(pr->sourceLabel()) + " via AutoEQ";
             if (heading != lastHeading) {
                 targetRows.push_back({ true, heading, -1 });
@@ -1232,12 +1342,15 @@ void BteqEditor::refreshTargets() {
             }
             targetRows.push_back({ false, juce::String(pr->target), (int)i });
         }
+        if (lastHeading != "Your presets") targetRows.push_back({ true, "Your presets", -1 });
+        targetRows.push_back({ false, "New preset...", kNewPresetRow });
     }
     targetList.updateContent();
     targetList.repaint();
 }
 
 void BteqEditor::timerCallback() {
+    styleTitleBar();
     if (proc.selectedHeadphone() != shownHeadphone || proc.selectedProfileIndex() != shownProfile ||
         proc.matchedHeadphone() != shownMatch)
         refreshTargets();
@@ -1355,10 +1468,11 @@ void BteqEditor::paintContent(juce::Graphics& g) {
         if (proc.currentMatch().active) note = "Sounding like " + proc.matchedHeadphone();
         else if (proc.matchedHeadphone().isNotEmpty()) note = "No measurement to match with for this source";
         else if (proc.graphicModeActive()) note = "Wavelet-style 127-point curve";
+        else if (BteqProcessor::isCustom(p)) note = "Your preset \"" + juce::String(p->target) + "\": drag the values or points to shape it";
         else if (p->originalPreset && !proc.selectionEdited()) note = juce::String((int)p->parametric.filters.size()) + " filters, exactly as " + juce::String(p->source) + " published them";
         else if (p->originalPreset) note = juce::String((int)p->parametric.filters.size()) + " filters from " + juce::String(p->source);
         else note = juce::String((int)p->parametric.filters.size()) + " filters from AutoEQ";
-        if (!proc.graphicAvailable() && p->hasParametric) note << " (no graphic version)";
+        if (!proc.graphicAvailable() && p->hasParametric && !BteqProcessor::isCustom(p)) note << " (no graphic version)";
         if (proc.selectionEdited()) note << ", edited by you";
         if (proc.myEqActive()) note << ", plus My EQ";
     }
@@ -1693,6 +1807,86 @@ void BteqEditor::askForName(const juce::String& title, const juce::String& initi
     }
 }
 
+// ---------------------------------------------------------------------------
+// Your own presets
+// ---------------------------------------------------------------------------
+void BteqEditor::showNewPresetMenu() {
+    const auto* p = proc.selectedProfile();
+    const bool canCopy = p != nullptr && p->hasParametric && !proc.currentMatch().active;
+    juce::PopupMenu menu;
+    menu.addSectionHeader("New preset for " + proc.selectedHeadphone());
+    menu.addItem(1, "Start flat (10 filters at 0 dB)");
+    menu.addItem(2, canCopy ? "Copy the selected target's filters" : "Copy the selected target's filters (parametric only)", canCopy);
+    menu.addItem(3, "Import a ParametricEQ.txt file...");
+    juce::Component::SafePointer<BteqEditor> safe(this);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&targetList), [safe](int result) {
+        if (safe == nullptr || result == 0) return;
+        if (result == 1) {
+            bteq::ParametricPreset flat;
+            flat.filters = BteqProcessor::defaultMyEqBands();
+            for (auto& f : flat.filters) f.gainDb = 0;
+            safe->newPreset(flat, "My preset");
+        } else if (result == 2) {
+            auto copy = safe->proc.effectiveParametric();
+            safe->newPreset(copy, juce::String(safe->proc.selectedProfile()->target) + " (mine)");
+        } else {
+            safe->fileChooser = std::make_unique<juce::FileChooser>("Import a parametric EQ (Equalizer APO / AutoEQ format)",
+                                                                    juce::File(), "*.txt");
+            safe->fileChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                           [safe](const juce::FileChooser& fc) {
+                if (safe == nullptr || fc.getResult() == juce::File()) return;
+                const auto file = fc.getResult();
+                std::vector<std::string> skipped;
+                auto parsed = bteq::parseParametricText(file.loadFileAsString().toStdString(), &skipped);
+                if (!parsed || parsed->filters.empty()) {
+                    juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Import",
+                                                           "No filters were found in " + file.getFileName() + ".", "OK", safe.getComponent());
+                    return;
+                }
+                if ((int)parsed->filters.size() > FiltersPanel::maxCards) parsed->filters.resize(FiltersPanel::maxCards);
+                safe->newPreset(*parsed, file.getFileNameWithoutExtension());
+            });
+        }
+    });
+}
+
+void BteqEditor::newPreset(const bteq::ParametricPreset& preset, const juce::String& suggestedName) {
+    juce::Component::SafePointer<BteqEditor> safe(this);
+    askForName("Name your preset", suggestedName, [safe, preset](juce::String name) {
+        if (safe == nullptr) return;
+        safe->proc.addCustomPreset(name, preset);
+        safe->refreshTargets();
+        safe->refreshEditing();
+        safe->content.repaint();
+    });
+}
+
+void BteqEditor::showCustomPresetMenu(int profileIndex) {
+    const auto profs = proc.profilesFor(proc.selectedHeadphone());
+    if (profileIndex >= (int)profs.size()) return;
+    const juce::String name(profs[(size_t)profileIndex]->target);
+    juce::PopupMenu menu;
+    menu.addSectionHeader(name);
+    menu.addItem(1, "Rename...");
+    menu.addItem(2, "Delete");
+    juce::Component::SafePointer<BteqEditor> safe(this);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&targetList), [safe, profileIndex, name](int result) {
+        if (safe == nullptr || result == 0) return;
+        if (result == 1) {
+            safe->askForName("Rename preset", name, [safe, profileIndex](juce::String newName) {
+                if (safe == nullptr) return;
+                safe->proc.renameCustomPreset(profileIndex, newName);
+                safe->refreshTargets();
+            });
+        } else {
+            safe->proc.deleteCustomPreset(profileIndex);
+            safe->refreshTargets();
+            safe->refreshEditing();
+            safe->content.repaint();
+        }
+    });
+}
+
 void BteqEditor::showSavedMenu() {
     auto saved = loadSavedProfiles();
     const bool canSave = proc.selectedProfile() != nullptr;
@@ -1811,6 +2005,14 @@ void BteqEditor::TargetModel::paintListBoxItem(int row, juce::Graphics& g, int w
         g.drawText(r.text, 2, h / 2 - 2, w - 4, h / 2, juce::Justification::centredLeft, true);
         return;
     }
+    if (r.profile == kNewPresetRow) { // a plus instead of a dot
+        g.setColour(Theme::soft);
+        g.fillRect(10.0f, h * 0.5f - 1.0f, 10.0f, 2.0f);
+        g.fillRect(14.0f, h * 0.5f - 5.0f, 2.0f, 10.0f);
+        g.setFont(ed.theme->bodyFont(15.0f));
+        g.drawText(r.text, 30, 0, w - 34, h, juce::Justification::centredLeft, true);
+        return;
+    }
     const bool matching = ed.proc.matchedHeadphone().isNotEmpty();
     const bool on = r.profile == kMatchRow ? matching : !matching && r.profile == ed.proc.selectedProfileIndex();
     if (on) {
@@ -1827,10 +2029,20 @@ void BteqEditor::TargetModel::paintListBoxItem(int row, juce::Graphics& g, int w
     g.drawText(r.text, 30, 0, w - 34, h, juce::Justification::centredLeft, true);
 }
 
-void BteqEditor::TargetModel::listBoxItemClicked(int row, const juce::MouseEvent&) {
+void BteqEditor::TargetModel::listBoxItemClicked(int row, const juce::MouseEvent& e) {
     if (row < 0 || row >= (int)ed.targetRows.size() || ed.targetRows[(size_t)row].header) return;
-    if (ed.targetRows[(size_t)row].profile == kMatchRow) {
+    const int profile = ed.targetRows[(size_t)row].profile;
+    if (profile == kMatchRow) {
         ed.showMatchChooser(ed.targetList.getRowPosition(row, false));
+        return;
+    }
+    if (profile == kNewPresetRow) {
+        ed.showNewPresetMenu();
+        return;
+    }
+    if (e.mods.isPopupMenu()) { // right-click one of your presets: rename or delete it
+        const auto profs = ed.proc.profilesFor(ed.proc.selectedHeadphone());
+        if (profile < (int)profs.size() && BteqProcessor::isCustom(profs[(size_t)profile])) ed.showCustomPresetMenu(profile);
         return;
     }
     ed.proc.setMatch({});
