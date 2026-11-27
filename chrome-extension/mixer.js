@@ -188,6 +188,7 @@ async function doRefresh() {
 const MASTER_MIN = -30, MASTER_MAX = 6;
 let masterDb = 0;
 let masterTimer = null;
+let masterMute = false;
 
 function knobPoint(a, r) {   // angle in degrees, 0 = straight up
   const t = (a - 90) * Math.PI / 180;
@@ -207,6 +208,9 @@ function drawKnob() {
   $('knobPointer').setAttribute('x2', x);
   $('knobPointer').setAttribute('y2', y);
   $('masterValue').textContent = fmt(masterDb) + ' dB';
+  $('masterMute').classList.toggle('on', masterMute);
+  $('masterMute').textContent = masterMute ? 'Muted' : 'Mute';
+  $('knob').classList.toggle('muted', masterMute);
 }
 
 function setMasterDb(db) {
@@ -232,6 +236,11 @@ function buildKnob() {
   knob.addEventListener('pointerup', end);
   knob.addEventListener('pointercancel', end);
   knob.addEventListener('dblclick', () => setMasterDb(0));
+  $('masterMute').addEventListener('click', async () => {
+    masterMute = !masterMute;
+    drawKnob();
+    await send({ type: 'masterMute', on: masterMute });
+  });
   knob.addEventListener('wheel', (e) => { e.preventDefault(); setMasterDb(masterDb + (e.deltaY < 0 ? 0.5 : -0.5)); }, { passive: false });
   knob.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowUp' || e.key === 'ArrowRight') setMasterDb(masterDb + 0.5);
@@ -266,6 +275,7 @@ function applyTheme() {
 async function init() {
   const s = await chrome.storage.local.get(['profiles', 'accent', 'lastSettings', 'master']);
   masterDb = s.master ?? 0;
+  masterMute = !!(await chrome.storage.session.get('masterMute')).masterMute;
   profiles = s.profiles || {};
   accent = s.accent ?? 0;
   lastSettings = s.lastSettings || null;
@@ -283,6 +293,7 @@ async function init() {
         refresh();
       }
     }
+    if (area === 'session' && changes.masterMute) { masterMute = !!changes.masterMute.newValue; drawKnob(); }
     if (area === 'session' && changes.tabs && pending.size === 0) {
       for (const id of Object.keys(changes.tabs.newValue || {})) notes.delete(Number(id));
       refresh();

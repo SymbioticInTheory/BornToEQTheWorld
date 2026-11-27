@@ -4,22 +4,24 @@ import { buildChain, applySettings } from './eq.js';
 let ctx = null;
 let master = null;       // master level for every tab, after each tab's own EQ and level
 let masterDb = 0;
+let masterMute = false;
 const tabs = new Map(); // tabId -> { stream, source, chain }
 
 function audio() {
   if (!ctx) {
     ctx = new AudioContext({ latencyHint: 'playback' });
     master = ctx.createGain();
-    master.gain.value = Math.pow(10, masterDb / 20);
+    master.gain.value = masterMute ? 0 : Math.pow(10, masterDb / 20);
     master.connect(ctx.destination);
   }
   return ctx;
 }
 
-function setMaster(db, smooth = true) {
+function setMaster(db, mute, smooth = true) {
   masterDb = db;
+  masterMute = !!mute;
   if (!master) return;
-  const lin = Math.pow(10, db / 20);
+  const lin = masterMute ? 0 : Math.pow(10, db / 20);
   if (smooth) master.gain.setTargetAtTime(lin, ctx.currentTime, 0.007); else master.gain.value = lin;
 }
 
@@ -56,12 +58,12 @@ function stop(tabId) {
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg.target !== 'offscreen') return false;
   if (msg.type === 'master') {
-    setMaster(msg.db);
+    setMaster(msg.db, msg.mute);
     reply({ ok: true });
     return false;
   }
   if (msg.type === 'start') {
-    if (typeof msg.master === 'number') setMaster(msg.master, false);
+    if (typeof msg.master === 'number') setMaster(msg.master, msg.masterMute, false);
     start(msg.tabId, msg.streamId, msg.settings)
       .then(() => reply({ ok: true }))
       .catch((e) => reply({ ok: false, error: String(e && e.message || e) }));

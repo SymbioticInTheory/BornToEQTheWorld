@@ -39,6 +39,13 @@ async function stopTab(tabId) {
   }
 }
 
+async function sendMaster(tabs) {
+  if (!Object.keys(tabs).length) return;   // no audio page open
+  const { master = 0 } = await chrome.storage.local.get('master');
+  const { masterMute = false } = await chrome.storage.session.get('masterMute');
+  try { await chrome.runtime.sendMessage({ target: 'offscreen', type: 'master', db: master, mute: masterMute }); } catch (_) {}
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg.target !== 'background') return false;
   (async () => {
@@ -50,8 +57,9 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       case 'start': {
         await ensureOffscreen();
         const { master = 0 } = await chrome.storage.local.get('master');
+        const { masterMute = false } = await chrome.storage.session.get('masterMute');
         const r = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'start', tabId: msg.tabId,
-                                                     streamId: msg.streamId, settings: msg.settings, master });
+                                                     streamId: msg.streamId, settings: msg.settings, master, masterMute });
         if (!r || !r.ok) { reply({ ok: false, error: (r && r.error) || 'Could not start' }); return; }
         tabs[msg.tabId] = msg.settings;
         await setTabs(tabs);
@@ -72,11 +80,27 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         return;
       case 'master': // the mixer's master knob, for every tab that is on
         await chrome.storage.local.set({ master: msg.db });
-        if (Object.keys(tabs).length) {
-          try { await chrome.runtime.sendMessage({ target: 'offscreen', type: 'master', db: msg.db }); } catch (_) {}
-        }
+        await sendMaster(tabs);
         reply({ ok: true });
         return;
+      case 'masterMute': { // silences everything: tabs that are on through BEQ, the rest through Chrome
+        const { mutedByMaster = [] } = await chrome.storage.session.get('mutedByMaster');
+        if (msg.on) {
+          const playing = await chrome.tabs.query({ audible: true });
+          for (const t of playing) {
+            if (tabs[t.id] || (t.mutedInfo && t.mutedInfo.muted)) continue;
+            try { await chrome.tabs.update(t.id, { muted: true }); mutedByMaster.push(t.id); } catch (_) {}
+          }
+          await chrome.storage.session.set({ masterMute: true, mutedByMaster });
+        } else {
+          // Unmute only the tabs the master muted, not ones you muted yourself.
+          for (const id of mutedByMaster) { try { await chrome.tabs.update(id, { muted: false }); } catch (_) {} }
+          await chrome.storage.session.set({ masterMute: false, mutedByMaster: [] });
+        }
+        await sendMaster(tabs);
+        reply({ ok: true });
+        return;
+      }
       case 'openMixer': {
         // One mixer window: bring it forward if it is already open.
         const { mixerWindow } = await chrome.storage.session.get('mixerWindow');

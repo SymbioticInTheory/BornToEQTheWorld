@@ -39,3 +39,4 @@ body.window header { height: 52px; }
 .knob-arc { fill: none; stroke: var(--accent); stroke-width: 3.5; stroke-linecap: round; }
 .knob-pointer { stroke: var(--bright); stroke-width: 3; stroke-linecap: round; }
 #knob:focus-visible .knob-body { stroke: var(--soft); }
+#knob.muted { opacity: 0.45; }
