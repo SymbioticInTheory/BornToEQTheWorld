@@ -2,6 +2,8 @@
 body.window { display: flex; flex-direction: column; }
 #rows { flex: 1; }
 .sub .hint { color: var(--soft); }
+.sub #size { flex: 0 0 auto; width: auto; margin-left: auto; align-self: center; height: 22px; font-size: 11px; padding: 0 4px; }
+body.window { zoom: var(--zoom, 1); min-height: calc(100vh / var(--zoom, 1)); }
 
 .strip { padding: 8px 10px; }
 .strip .top { display: flex; align-items: center; gap: 8px; min-width: 0; }

@@ -19,6 +19,12 @@ No headphone correction: just tone and volume, per tab.
   you used last.
 - Drag the bands (double-click for 0 dB) and the level. **Headroom** lowers the
   tab by the EQ's highest boost so boosts can't clip.
+- Each band's frequency (the number under it) and **Q** (its width) can be
+  dragged up or down too; Shift for fine steps, double-click to reset. A band
+  moves only between its neighbours' usual frequencies, and Q goes from 0.3
+  (wide) to 8 (narrow). The two end bands are shelves, so they have no Q.
+  Tuned values show in your colour, are saved with your profiles, and a
+  built-in preset puts them back to normal.
 - Pick a standard preset, or **Save** your own profiles (kept in Chrome).
 - The dots pick the colour, like in the plugin.
 - The background menu (at the bottom of the mixer) picks the Forest, one of
@@ -41,6 +47,8 @@ tab playing sound:
   down (Shift for fine steps), scroll on it, or double-click for 0 dB.
 - **Mute** next to it silences every tab playing sound. Pressing it again
   unmutes only the tabs it muted, not ones you muted yourself.
+- The size menu (top right, 80% to 175%) scales the whole mixer, and its
+  window grows or shrinks to match. The mixer opens at that size next time.
 
 The mixer needs Chrome's "tabs" permission to show tab titles and icons, so
 Chrome lists the extension as able to read your browsing history. Nothing

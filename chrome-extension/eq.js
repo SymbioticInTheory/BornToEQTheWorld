@@ -5,7 +5,20 @@ export const BANDS = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 export const BAND_LABELS = ['32', '64', '125', '250', '500', '1k', '2k', '4k', '8k', '16k'];
 export const GAIN_RANGE = 12;          // each band: -12 to +12 dB
 export const LEVEL_MIN = -40, LEVEL_MAX = 12;
-const PEAK_Q = 1.41;                   // one octave wide, like a classic 10-band graphic EQ
+export const PEAK_Q = 1.41;            // one octave wide, like a classic 10-band graphic EQ
+export const Q_MIN = 0.3, Q_MAX = 8;
+
+// Each band's frequency can move between its neighbours' usual frequencies
+// (the ends go down to 20 Hz and up to 20 kHz).
+export function freqRange(i) {
+  const lo = i > 0 ? BANDS[i - 1] * 1.05 : 20;
+  const hi = i < BANDS.length - 1 ? BANDS[i + 1] / 1.05 : 20000;
+  return [lo, hi];
+}
+// A band's frequency and Q in these settings (older settings have neither).
+export const bandFreq = (s, i) => (s.freqs && s.freqs[i]) || BANDS[i];
+export const bandQ = (s, i) => (s.qs && s.qs[i]) || PEAK_Q;
+export function bandTuned(s, i) { return bandFreq(s, i) !== BANDS[i] || bandQ(s, i) !== PEAK_Q; }
 
 // The first and last bands are shelves; the rest are peaks.
 export function bandType(i) {
@@ -63,28 +76,45 @@ export function maxBoostDb(chain) {
 export function applySettings(chain, s, ctx, smooth = true) {
   const t = ctx.currentTime;
   chain.filters.forEach((f, i) => {
-    const g = s.gains[i] || 0;
-    if (smooth) f.gain.setTargetAtTime(g, t, 0.007); else f.gain.value = g;
+    const g = s.gains[i] || 0, fr = bandFreq(s, i), q = bandQ(s, i);
+    if (smooth) {
+      f.gain.setTargetAtTime(g, t, 0.007);
+      f.frequency.setTargetAtTime(fr, t, 0.007);
+      if (f.type === 'peaking') f.Q.setTargetAtTime(q, t, 0.007);
+    } else {
+      f.gain.value = g;
+      f.frequency.value = fr;
+      if (f.type === 'peaking') f.Q.value = q;
+    }
   });
-  const headroom = s.headroom ? -maxBoostDbFor(s.gains) : 0;
+  const headroom = s.headroom ? -maxBoostDbFor(s) : 0;
   const lin = s.muted ? 0 : Math.pow(10, (s.level + headroom) / 20);
   if (smooth) chain.gain.gain.setTargetAtTime(lin, t, 0.007); else chain.gain.gain.value = lin;
 }
 
-// The same highest boost, worked out from the gains alone (on a throwaway context).
+// The same highest boost, worked out from the settings alone (on a throwaway
+// context). Takes settings, or just an array of gains.
 let probe = null;
-export function maxBoostDbFor(gains) {
+function setProbe(s) {
+  if (Array.isArray(s)) s = { gains: s };
   if (!probe) {
     const ctx = new OfflineAudioContext(1, 1, 48000);
     probe = buildChain(ctx);
   }
-  probe.filters.forEach((f, i) => { f.gain.value = gains[i] || 0; });
+  probe.filters.forEach((f, i) => {
+    f.gain.value = s.gains[i] || 0;
+    f.frequency.value = bandFreq(s, i);
+    if (f.type === 'peaking') f.Q.value = bandQ(s, i);
+  });
+}
+export function maxBoostDbFor(s) {
+  setProbe(s);
   return maxBoostDb(probe);
 }
 
 // The curve for drawing: dB at each of `freqs`.
-export function responseDb(gains, freqs) {
-  maxBoostDbFor(gains); // makes sure the probe is set to these gains
+export function responseDb(s, freqs) {
+  setProbe(s);
   if (!(freqs instanceof Float32Array)) freqs = Float32Array.from(freqs);
   const n = freqs.length, mag = new Float32Array(n), phase = new Float32Array(n), total = new Float32Array(n);
   for (const f of probe.filters) {
@@ -96,12 +126,19 @@ export function responseDb(gains, freqs) {
 
 // Picks a preset ('p:Rock') or one of your profiles ('u:name') into settings.
 export function applyPreset(s, key, profiles) {
-  if (key.startsWith('p:') && PRESETS[key.slice(2)]) s.gains = PRESETS[key.slice(2)].slice();
+  // Presets are made for the usual frequencies and Q, so they bring those back.
+  if (key.startsWith('p:') && PRESETS[key.slice(2)]) {
+    s.gains = PRESETS[key.slice(2)].slice();
+    delete s.freqs;
+    delete s.qs;
+  }
   if (key.startsWith('u:') && profiles[key.slice(2)]) {
     const p = profiles[key.slice(2)];
     s.gains = p.gains.slice();
     s.level = p.level;
     s.headroom = p.headroom;
+    if (p.freqs) s.freqs = p.freqs.slice(); else delete s.freqs;
+    if (p.qs) s.qs = p.qs.slice(); else delete s.qs;
   }
   s.preset = key;
   return s;

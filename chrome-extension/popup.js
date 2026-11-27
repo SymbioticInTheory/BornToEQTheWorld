@@ -1,5 +1,5 @@
 import { applyTheme, buildSwatches as buildThemeSwatches, loadTheme } from './theme.js';
-import { BANDS, BAND_LABELS, GAIN_RANGE, PRESETS, defaultSettings, responseDb, maxBoostDbFor, applyPreset } from './eq.js';
+import { BANDS, BAND_LABELS, GAIN_RANGE, PRESETS, PEAK_Q, Q_MIN, Q_MAX, bandType, bandFreq, bandQ, freqRange, defaultSettings, responseDb, maxBoostDbFor, applyPreset } from './eq.js';
 
 // popup.html?tab=ID&from=mixer edits that tab inside the mixer window.
 const params = new URLSearchParams(location.search);
@@ -74,8 +74,23 @@ function buildBands() {
     col.innerHTML = `<span class="value"></span>
       <input type="range" min="${-GAIN_RANGE}" max="${GAIN_RANGE}" step="0.5" value="0"
              title="${BAND_LABELS[i]} Hz. Double-click for 0 dB">
-      <span class="label">${BAND_LABELS[i]}</span>`;
+      <span class="label freq" title="${bandType(i) === 'peaking' ? 'Frequency' : bandType(i) === 'lowshelf' ? 'Low shelf frequency' : 'High shelf frequency'}. Drag up or down (Shift: fine). Double-click for ${BAND_LABELS[i]}">${BAND_LABELS[i]}</span>
+      <span class="q${bandType(i) === 'peaking' ? '' : ' shelf'}" title="${bandType(i) === 'peaking' ? 'Q (width). Drag up for narrower, down for wider (Shift: fine). Double-click for ' + PEAK_Q : 'Shelf'}"></span>`;
     const input = col.querySelector('input');
+    const tune = (key, value) => {
+      if (!settings[key]) settings[key] = key === 'freqs' ? BANDS.slice() : BANDS.map(() => PEAK_Q);
+      settings[key][i] = value;
+      settings.preset = '';
+      changed();
+    };
+    const [lo, hi] = freqRange(i);
+    dragValue(col.querySelector('.freq'), () => bandFreq(settings, i),
+      (start, dy, fine) => Math.min(hi, Math.max(lo, start * Math.pow(2, -dy / (fine ? 600 : 120)))),
+      (v) => tune('freqs', Math.round(v)), () => tune('freqs', BANDS[i]));
+    if (bandType(i) === 'peaking')
+      dragValue(col.querySelector('.q'), () => bandQ(settings, i),
+        (start, dy, fine) => Math.min(Q_MAX, Math.max(Q_MIN, start * Math.pow(2, -dy / (fine ? 400 : 80)))),
+        (v) => tune('qs', Math.round(v * 100) / 100), () => tune('qs', PEAK_Q));
     input.addEventListener('input', () => {
       settings.gains[i] = Number(input.value);
       settings.preset = '';
@@ -89,6 +104,23 @@ function buildBands() {
     box.appendChild(col);
   });
 }
+
+// Drag a label up or down to change its value; double-click to reset it.
+function dragValue(el, get, next, set, reset) {
+  let startY = 0, start = 0;
+  const move = (e) => set(next(start, e.clientY - startY, e.shiftKey));
+  el.addEventListener('pointerdown', (e) => {
+    startY = e.clientY; start = get();
+    el.setPointerCapture(e.pointerId);
+    el.addEventListener('pointermove', move);
+  });
+  const end = () => el.removeEventListener('pointermove', move);
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+  el.addEventListener('dblclick', reset);
+}
+
+const fmtFreq = (f) => (f >= 1000 ? String(Math.round(f / 10) / 100) + 'k' : String(Math.round(f)));
 
 function buildPresetList() {
   const sel = $('preset');
@@ -147,7 +179,7 @@ function drawCurve() {
 
   const n = 300, freqs = new Float32Array(n);
   for (let i = 0; i < n; i++) freqs[i] = 20 * Math.pow(1000, i / (n - 1));
-  const db = responseDb(settings.gains, freqs);
+  const db = responseDb(settings, freqs);
   const color = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
   // Soft fill under the curve, then the line.
   g.beginPath();
@@ -175,10 +207,16 @@ function render() {
     const input = col.querySelector('input');
     if (Number(input.value) !== settings.gains[i]) input.value = settings.gains[i];
     col.querySelector('.value').textContent = fmt(settings.gains[i]);
+    const fr = bandFreq(settings, i), q = bandQ(settings, i);
+    const freqEl = col.querySelector('.freq'), qEl = col.querySelector('.q');
+    freqEl.textContent = fr === BANDS[i] ? BAND_LABELS[i] : fmtFreq(fr);
+    freqEl.classList.toggle('tuned', fr !== BANDS[i]);
+    qEl.textContent = bandType(i) === 'peaking' ? 'Q ' + q.toFixed(q < 10 ? 2 : 1).replace(/0$/, '') : 'shelf';
+    qEl.classList.toggle('tuned', bandType(i) === 'peaking' && q !== PEAK_Q);
   });
 
   $('level').value = settings.level;
-  const headroomDb = settings.headroom ? maxBoostDbFor(settings.gains) : 0;
+  const headroomDb = settings.headroom ? maxBoostDbFor(settings) : 0;
   $('levelValue').textContent = settings.muted ? 'Muted' : fmt(settings.level) + ' dB';
   $('levelValue').title = settings.headroom && headroomDb > 0.05
     ? `Plus ${fmt(-headroomDb)} dB headroom for the EQ's boosts` : '';
@@ -252,6 +290,8 @@ async function init() {
     const name = (prompt('Name this profile', current || 'My profile') || '').trim();
     if (!name) return;
     profiles[name] = { gains: settings.gains.slice(), level: settings.level, headroom: settings.headroom };
+    if (settings.freqs) profiles[name].freqs = settings.freqs.slice();
+    if (settings.qs) profiles[name].qs = settings.qs.slice();
     await saveProfiles();
     settings.preset = 'u:' + name;
     buildPresetList();
