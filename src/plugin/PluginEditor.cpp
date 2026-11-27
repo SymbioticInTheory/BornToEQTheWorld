@@ -1744,7 +1744,7 @@ void BteqEditor::showScaleMenu() {
     const int sizes[] = { 125, 110, 100, 90, 75, 60, 50 };
     for (int pct : sizes)
         menu.addItem(pct, juce::String(pct) + "%", true, juce::roundToInt(proc.uiScale * 100.0f) == pct);
-    constexpr int kImage = 1001, kForest = 1002;
+    static constexpr int kImage = 1001, kForest = 1002;
     menu.addSectionHeader("Background");
     menu.addItem(kImage, Theme::hasImage ? "Choose another image..." : "Your own image...");
     menu.addItem(kForest, "Forest", true, !Theme::hasImage);
