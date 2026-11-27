@@ -38,7 +38,12 @@ No headphone correction: just tone and volume, per tab.
   slope (tilt around 1 kHz), smoothing (fractional octave), and the level
   and frequency range. **Defaults** puts back the mastering setup (6 s
   average, 8192 block, 88% overlap, 4.5 dB/oct, 2/3 octave, -69 to -12 dB).
-  Hover for the frequency and level; double-click to reset the average.
+  Average time, overlap, slope, smoothing and the ranges are knobs (drag,
+  scroll, double-click for the default); **Settings ▾** folds them away.
+  **EQ** at the top picks a tab whose EQ is drawn over the spectrum: drag its
+  numbered points for frequency and gain, scroll on one for Q, double-click
+  one for 0 dB. Changes go to that tab straight away.
+  Hover for the frequency and level; double-click the graph to reset the average.
   Only tabs that are on in BEQ are included, since those are the ones BEQ
   plays.
 - Pick a standard preset, or **Save** your own profiles (kept in Chrome).
