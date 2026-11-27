@@ -132,12 +132,42 @@ void CustomPresetStore::save() const {
 // ---------------------------------------------------------------------------
 // The library, kept only while needed in Low memory mode
 // ---------------------------------------------------------------------------
+juce::File BteqProcessor::settingsFile() {
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("Born To EQ The World")
+        .getChildFile("settings.xml");
+}
+
+namespace {
+bteq::spectrum::Settings& analyserCache() {
+    static bteq::spectrum::Settings s = [] {
+        if (auto xml = juce::XmlDocument::parse(BteqProcessor::settingsFile()))
+            if (xml->hasAttribute("analyser"))
+                return bteq::spectrum::Settings::fromString(xml->getStringAttribute("analyser").toStdString());
+        return bteq::spectrum::Settings {};
+    }();
+    return s;
+}
+int analyserVersionCounter = 0;
+} // namespace
+
+const bteq::spectrum::Settings& BteqProcessor::analyserSettings() { return analyserCache(); }
+int BteqProcessor::analyserVersion() { return analyserVersionCounter; }
+
+void BteqProcessor::setAnalyserSettings(const bteq::spectrum::Settings& s, bool writeFile) {
+    analyserCache() = s;
+    ++analyserVersionCounter;
+    if (!writeFile) return;
+    auto xml = juce::XmlDocument::parse(settingsFile());
+    if (xml == nullptr) xml = std::make_unique<juce::XmlElement>("SETTINGS");
+    xml->setAttribute("analyser", juce::String(s.toString()));
+    settingsFile().getParentDirectory().createDirectory();
+    xml->writeTo(settingsFile());
+}
+
 std::atomic<bool>& BteqProcessor::lowMemoryFlag() {
     static std::atomic<bool> flag { [] {
-        const auto f = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-                           .getChildFile("Born To EQ The World")
-                           .getChildFile("settings.xml");
-        if (auto xml = juce::XmlDocument::parse(f)) return xml->getBoolAttribute("lowMemory", false);
+        if (auto xml = juce::XmlDocument::parse(settingsFile())) return xml->getBoolAttribute("lowMemory", false);
         return false;
     }() };
     return flag;
@@ -974,6 +1004,9 @@ void BteqProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     // While Equalizer APO applies the EQ system-wide, the standalone's own path stays clean (no double EQ).
     const bool bypass = bypassParam->load() > 0.5f || apoRunning.load();
     const int chans = juce::jmin(buffer.getNumChannels(), 2);
+    // The analyser, when one is showing: the input before any correction (or the output, below).
+    const bool tapping = spectrumTap.wanted();
+    if (tapping && spectrumTap.where.load() == 0) spectrumTap.write(buffer.getArrayOfReadPointers(), chans, n);
     bool usedGraphic = false, usedEq = false, usedExtra = false;
     if (!bypass) {
         if (graphicReady.load() && graphicSlot.active != nullptr) {
@@ -995,6 +1028,7 @@ void BteqProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
 
     trimGain.setTargetValue(apoRunning.load() ? 1.0f : juce::Decibels::decibelsToGain(trimParam->load()));
     trimGain.applyGain(buffer, n);
+    if (tapping && spectrumTap.where.load() == 1) spectrumTap.write(buffer.getArrayOfReadPointers(), chans, n);
 }
 
 // ---------------------------------------------------------------------------
@@ -1008,6 +1042,7 @@ void BteqProcessor::getStateInformation(juce::MemoryBlock& destData) {
     state.setProperty("accent", accentIndex, nullptr);
     state.setProperty("accentOrder", 2, nullptr);
     state.setProperty("advanced", advancedView, nullptr);
+    state.setProperty("analyser", analyserOn, nullptr);
     state.setProperty("hiddenCurves", hiddenCurves, nullptr);
     state.setProperty("uiScale", uiScale, nullptr);
     state.setProperty("match", matchName, nullptr);
@@ -1067,6 +1102,7 @@ void BteqProcessor::setStateInformation(const void* data, int sizeInBytes) {
     // Sessions from before red became the first colour had Ember first and Blood red second.
     if (!state.hasProperty("accentOrder") && accentIndex == 1) accentIndex = 0;
     advancedView = (bool)state.getProperty("advanced", false);
+    analyserOn = (bool)state.getProperty("analyser", false);
     hiddenCurves = (int)state.getProperty("hiddenCurves", 0);
     uiScale = (float)state.getProperty("uiScale", 0.0);
     editingMyEq = (bool)state.getProperty("editingMyEq", false);

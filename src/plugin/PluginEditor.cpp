@@ -1,6 +1,7 @@
 #include "PluginEditor.h"
 
 #include "ImageTheme.h"
+#include "AnalyserWindow.h"
 
 #include <BinaryData.h>
 
@@ -156,7 +157,7 @@ void BteqLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w, i
     const auto c = r.getCentre();
     const float angle = start + pos * (end - start);
     // Arc track and value (from 0 dB).
-    const float zeroPos = (float)s.valueToProportionOfLength(0.0);
+    const float zeroPos = s.getMinimum() <= 0.0 && s.getMaximum() >= 0.0 ? (float)s.valueToProportionOfLength(0.0) : 0.0f;
     const float zeroAngle = start + zeroPos * (end - start);
     juce::Path track, value;
     track.addCentredArc(c.x, c.y, radius, radius, 0.0f, start, end, true);
@@ -325,8 +326,55 @@ ResponseGraph::ResponseGraph(BteqProcessor& p, const Theme& t) : proc(p), theme(
         if (onMyEqToggled) onMyEqToggled();
     };
     addChildComponent(scopeButton);
+    analyserButton.getProperties().set("kind", "pill");
+    analyserButton.setClickingTogglesState(true);
+    analyserButton.setTooltip("Show the input's spectrum behind the curve (before any correction). Runs only while this is on and the window is open.");
+    analyserButton.onClick = [this] { setAnalyser(analyserButton.getToggleState()); };
+    addAndMakeVisible(analyserButton);
+    popOutButton.getProperties().set("kind", "pill");
+    popOutButton.setTooltip("Open the spectrum in its own window, with all its settings");
+    popOutButton.onClick = [this] { if (onPopOut) onPopOut(); };
+    addAndMakeVisible(popOutButton);
     refreshMyEqButton();
     setAdvanced(proc.advancedView);
+    setAnalyser(proc.analyserOn);
+}
+
+ResponseGraph::~ResponseGraph() {
+    const bool wasOn = proc.analyserOn; // stays on for next time the window opens
+    setAnalyser(false);
+    proc.analyserOn = wasOn;
+}
+
+void ResponseGraph::setAnalyser(bool on) {
+    proc.analyserOn = on;
+    analyserButton.setToggleState(on, juce::dontSendNotification);
+    if (on && overlay == nullptr) {
+        proc.spectrumTap.addViewer();
+        overlay = std::make_unique<bteq::spectrum::Analyser>();
+        overlayVersion = -1;
+        startTimerHz(30);
+    } else if (!on && overlay != nullptr) {
+        stopTimer();
+        overlay.reset(); // its buffers go with it
+        proc.spectrumTap.removeViewer();
+        repaint();
+    }
+}
+
+void ResponseGraph::timerCallback() {
+    if (overlay == nullptr || (getPeer() != nullptr && !isShowing())) return;
+    if (overlayVersion != BteqProcessor::analyserVersion()) {
+        overlayVersion = BteqProcessor::analyserVersion();
+        auto s = BteqProcessor::analyserSettings();
+        s.fLo = 20; s.fHi = 20000; // the graph's own frequency axis
+        const bool restart = s.block != overlay->settings.block || s.window != overlay->settings.window || s.where != overlay->settings.where;
+        overlay->settings = s;
+        if (restart) overlay->reset();
+        proc.spectrumTap.where = s.where;
+    }
+    overlay->process(proc.spectrumTap, proc.currentSampleRate());
+    repaint(plotArea().toNearestInt());
 }
 
 void ResponseGraph::refreshMyEqButton() {
@@ -345,6 +393,8 @@ void ResponseGraph::setAdvanced(bool on) {
 }
 
 void ResponseGraph::resized() {
+    analyserButton.setBounds(34, 2, 84, 24);
+    popOutButton.setBounds(34 + 84 + 6, 2, 84, 24);
     advancedButton.setBounds(getWidth() - 96, 2, 96, 24);
     myEqButton.setBounds(getWidth() - 96 - 8 - 76, 2, 76, 24);
     scopeButton.setBounds(myEqButton.getX() - 8 - 140, 2, 140, 24);
@@ -378,6 +428,11 @@ void ResponseGraph::paint(juce::Graphics& g) {
     for (double f : { 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0 }) g.drawVerticalLine((int)xOf(f), a.getY(), a.getBottom());
     g.setColour(juce::Colour(0x33ffffff));
     g.drawHorizontalLine((int)yOf(0), a.getX(), a.getRight());
+    if (overlay != nullptr) { // the spectrum, on its own dB scale, behind the curves
+        juce::Graphics::ScopedSaveState save(g);
+        g.reduceClipRegion(a.toNearestInt());
+        paintSpectrum(g, a, *overlay, juce::Colour(0xffBEBBB5).interpolatedWith(accent, 0.35f));
+    }
 
     g.setFont(theme.condFont(13.0f));
     g.setColour(Theme::muted);
@@ -1205,6 +1260,7 @@ BteqEditor::BteqEditor(BteqProcessor& p)
 
     content.addAndMakeVisible(graph);
     content.addAndMakeVisible(filters);
+    graph.onPopOut = [this] { openAnalyserWindow(); };
     graph.onMyEqToggled = [this] {
         refreshEditing();
         filters.repaint();
@@ -1301,7 +1357,19 @@ BteqEditor::BteqEditor(BteqProcessor& p)
     startTimerHz(15);
 }
 
+void BteqEditor::openAnalyserWindow() {
+    if (analyserWindow != nullptr) {
+        analyserWindow->toFront(true);
+        return;
+    }
+    analyserWindow = std::make_unique<AnalyserWindow>(proc, *theme, lnf, graph.accent, [safe = juce::Component::SafePointer<BteqEditor>(this)] {
+        // Closed: gone after this click is handled, and the analyser stops with it.
+        juce::MessageManager::callAsync([safe] { if (safe != nullptr) safe->analyserWindow.reset(); });
+    });
+}
+
 BteqEditor::~BteqEditor() {
+    analyserWindow.reset();
     // Low memory mode: free the headphone library once this window has gone.
     juce::MessageManager::callAsync([w = juce::WeakReference<BteqProcessor>(&proc)] {
         if (auto* p = w.get()) p->releaseLibraryIfUnused();
@@ -1327,6 +1395,7 @@ void BteqEditor::setAccent(int index) {
     if (proc.accentIndex == Theme::imageAccent && !Theme::hasImage) proc.accentIndex = 0; // the image was removed
     swatches[(size_t)Theme::imageAccent].getProperties().set("swatch", (juce::int64)Theme::imageColour.getARGB());
     lnf.accentColour = graph.accent = filters.accent = Theme::accent(proc.accentIndex);
+    if (auto* w = dynamic_cast<AnalyserWindow*>(analyserWindow.get())) w->setAccent(graph.accent);
     titleImage = makeDeathTitle(*theme, Theme::accent(proc.accentIndex), 3.0f, titleArea);
     swatches[(size_t)proc.accentIndex].setToggleState(true, juce::dontSendNotification);
     titleLnf.accentColour = Theme::accent(proc.accentIndex);
