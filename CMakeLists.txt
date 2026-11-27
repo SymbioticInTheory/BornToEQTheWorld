@@ -18,6 +18,8 @@ if(BTEQ_BUILD_TESTS)
   add_executable(test_library tests/test_library.cpp)
   add_executable(test_apo_config tests/test_apo_config.cpp)
   add_test(NAME apo_config COMMAND test_apo_config)
+  add_executable(test_image_theme tests/test_image_theme.cpp)
+  add_test(NAME image_theme COMMAND test_image_theme)
   add_test(NAME headphone_library
            COMMAND test_library ${CMAKE_SOURCE_DIR}/data/headphones.tsv ${CMAKE_SOURCE_DIR}/presets/sample)
   if(Python3_FOUND)
@@ -69,6 +71,11 @@ if(BTEQ_BUILD_PLUGIN)
       ${BTEQ_LIBRARY_GZ}
       ${BTEQ_CURVES_GZ}
       resources/forest.png
+      resources/backgrounds/sunset.jpg
+      resources/backgrounds/ocean.jpg
+      resources/backgrounds/neon.jpg
+      resources/backgrounds/moss.jpg
+      resources/backgrounds/concrete.jpg
       resources/lagrangian.png
       resources/fonts/PirataOne-Regular.ttf
       resources/fonts/BarlowCondensed-SemiBold.ttf

@@ -20,7 +20,11 @@ No headphone correction: just tone and volume, per tab.
 - Drag the bands (double-click for 0 dB) and the level. **Headroom** lowers the
   tab by the EQ's highest boost so boosts can't clip.
 - Pick a standard preset, or **Save** your own profiles (kept in Chrome).
-- The four dots pick the colour, like in the plugin.
+- The dots pick the colour, like in the plugin.
+- The background menu (at the bottom of the mixer) picks the Forest, one of
+  five built-in backgrounds, or **Your own image...**, for the popup and the
+  mixer. BEQ picks the colours from it (`theme.js`, the same way as the
+  plugin) and adds them as a fifth dot.
 
 ## Mixer
 

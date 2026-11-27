@@ -1,3 +1,4 @@
+import { applyTheme, buildSwatches as buildThemeSwatches, loadTheme } from './theme.js';
 import { BANDS, BAND_LABELS, GAIN_RANGE, PRESETS, defaultSettings, responseDb, maxBoostDbFor, applyPreset } from './eq.js';
 
 // popup.html?tab=ID&from=mixer edits that tab inside the mixer window.
@@ -5,21 +6,19 @@ const params = new URLSearchParams(location.search);
 const fixedTab = params.has('tab') ? Number(params.get('tab')) : null;
 const fromMixer = params.get('from') === 'mixer';
 
-const ACCENTS = ['#C42B2B', '#E46A2E', '#D9D5CD', '#7D78D6'];
-const ACCENT_NAMES = ['Blood red', 'Ember', 'Bone', 'Frost'];
 const $ = (id) => document.getElementById(id);
 
 let tabId = null;
 let active = false;
 let settings = defaultSettings();
 let profiles = {};   // your saved profiles: name -> settings
-let accent = 0;
+let theme = { accent: 0, image: null }; // colour, and your background image if any
 
 // ---------------------------------------------------------------- storage
 async function loadLocal() {
-  const s = await chrome.storage.local.get(['profiles', 'accent', 'lastSettings']);
+  const s = await chrome.storage.local.get(['profiles', 'lastSettings']);
   profiles = s.profiles || {};
-  accent = s.accent ?? 0;
+  theme = await loadTheme();
   return s.lastSettings || null;
 }
 const saveProfiles = () => chrome.storage.local.set({ profiles });
@@ -115,18 +114,10 @@ function buildPresetList() {
 }
 
 function buildSwatches() {
-  const box = $('swatches');
-  ACCENTS.forEach((c, i) => {
-    const b = document.createElement('button');
-    b.className = 'swatch';
-    b.title = ACCENT_NAMES[i];
-    b.innerHTML = `<span style="background:${c}"></span>`;
-    b.addEventListener('click', () => {
-      accent = i;
-      chrome.storage.local.set({ accent });
-      render();
-    });
-    box.appendChild(b);
+  buildThemeSwatches($('swatches'), (i) => {
+    theme.accent = i;
+    chrome.storage.local.set({ accent: i });
+    render();
   });
 }
 
@@ -175,9 +166,7 @@ function drawCurve() {
 }
 
 function render() {
-  document.documentElement.style.setProperty('--accent', ACCENTS[accent]);
-  $('title').src = `assets/title${accent}.png`;
-  [...$('swatches').children].forEach((b, i) => b.classList.toggle('on', i === accent));
+  applyTheme(theme, $('title'), $('swatches'));
 
   $('power').textContent = active ? 'On' : 'Off';
   $('power').classList.toggle('on', active);
@@ -212,9 +201,9 @@ async function init() {
   }
   if (fromMixer) {
     document.body.classList.add('window');
-    for (const n of [16, 32, 48, 128]) {   // keep the mixer's own icon in this window
+    for (const n of [16, 32, 48, 128]) {   // same window icon as the mixer page
       const l = document.createElement('link');
-      l.rel = 'icon'; l.sizes = `${n}x${n}`; l.href = `assets/mixer${n}.png`;
+      l.rel = 'icon'; l.sizes = `${n}x${n}`; l.href = `assets/icon${n}.png`;
       document.head.appendChild(l);
     }
     $('mixer').textContent = '‹ Mixer';
@@ -242,7 +231,8 @@ async function init() {
   // Follow changes made elsewhere (the mixer, or this tab's popup).
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && changes.profiles) { profiles = changes.profiles.newValue || {}; buildPresetList(); render(); }
-    if (area === 'local' && changes.accent) { accent = changes.accent.newValue ?? 0; render(); }
+    if (area === 'local' && (changes.accent || changes.bgImage || changes.imageColours))
+      loadTheme().then((t) => { theme = t; render(); });
     if (area !== 'session' || !changes.tabs || tabId == null || pushTimer) return;
     const t = (changes.tabs.newValue || {})[tabId];
     const nowActive = !!t;

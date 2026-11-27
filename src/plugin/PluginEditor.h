@@ -26,7 +26,13 @@ struct Theme {
     // Advanced view colours that stay clear of the chosen accent (used for the corrected curve).
     static juce::Colour measuredFor(int accentIndex);
     static juce::Colour eqFor(int accentIndex);
-    static constexpr int numAccents = 4;
+    static juce::Colour myEqFor(int accentIndex); // My EQ curve: lilac against light accents
+    // Four built-in colours, and a fifth picked from your own background image.
+    static constexpr int numAccents = 5, numBuiltIn = 4, imageAccent = 4;
+    // Set from the background image (see ImageTheme.h); shared by every open window.
+    static inline bool hasImage = false, imageVivid = true;
+    static inline juce::Colour imageColour { 0xffD9D5CD }, imageMeasured { 0xff4F86D6 }, imageEq { 0xffD2607E },
+        fog { 0xff0A0B0C };
 
     static inline const juce::Colour text { 0xffE8E4DC }, textBright { 0xffF2EEE6 }, muted { 0xffA6A49F },
         soft { 0xffBEBBB5 }, panel { 0xbd0C0D0F }, panelBorder { 0x17ffffff }, field { 0xb3060708 },
@@ -205,6 +211,14 @@ private:
     void mouseDown(const juce::MouseEvent&) override; // right-clicks anywhere in the window
     void showScaleMenu();
     void setUiScale(float scale);
+    // Background: the forest, or your own image (stored next to settings.xml) with colours picked from it.
+    static juce::File backgroundFile();
+    void loadBackground();
+    void chooseBackground();
+    void useBuiltInBackground(const juce::String& name); // Sunset, Ocean, ... (made by tools/make_backgrounds.py)
+    void storeBackground(const juce::Image& img, const juce::String& name);
+    void useForest();
+    void backgroundChanged();
     void timerCallback() override;
     void refreshHeadphones();
     void refreshTargets();

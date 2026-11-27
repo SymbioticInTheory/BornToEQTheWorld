@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <title>BEQ Mixer</title>
-<link rel="icon" sizes="16x16" href="assets/mixer16.png">
-<link rel="icon" sizes="32x32" href="assets/mixer32.png">
-<link rel="icon" sizes="48x48" href="assets/mixer48.png">
-<link rel="icon" sizes="128x128" href="assets/mixer128.png">
+<link rel="icon" sizes="16x16" href="assets/icon16.png">
+<link rel="icon" sizes="32x32" href="assets/icon32.png">
+<link rel="icon" sizes="48x48" href="assets/icon48.png">
+<link rel="icon" sizes="128x128" href="assets/icon128.png">
 <link rel="stylesheet" href="popup.css">
 <link rel="stylesheet" href="mixer.css">
 </head>
@@ -30,8 +30,19 @@
   <div id="rows"></div>
   <div id="empty" class="panel empty">No tabs are playing sound right now.</div>
 
+  <div id="themeNote" class="status"></div>
   <footer>
     <div id="swatches" class="swatches"></div>
+    <select id="background" title="Background. BEQ picks its colours from it and adds them as the last dot">
+      <option value="forest">Forest</option>
+      <option value="Sunset">Sunset</option>
+      <option value="Ocean">Ocean</option>
+      <option value="Neon">Neon</option>
+      <option value="Moss">Moss</option>
+      <option value="Concrete">Concrete</option>
+      <option value="custom">Your own image...</option>
+    </select>
+    <input id="imageFile" type="file" accept="image/*" hidden>
     <div class="lagrangian" title="The Standard Model"></div>
   </footer>
   <script type="module" src="mixer.js"></script>

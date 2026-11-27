@@ -27,7 +27,9 @@ body.window { display: flex; flex-direction: column; }
 .strip .note.warn { color: #FFB5A6; }
 
 .empty { color: var(--soft); text-align: center; padding: 18px 12px; }
-footer { margin-top: 4px; }
+footer { margin-top: 4px; justify-content: flex-start; }
+footer .lagrangian { margin-left: auto; }
+#background { flex: 0 0 auto; height: 24px; font-size: 12px; padding: 0 6px; }
 
 /* Master knob, like the plugin's preamp knob. */
 body.window header { height: 52px; }

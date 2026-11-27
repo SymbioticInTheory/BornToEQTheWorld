@@ -1,5 +1,7 @@
 #include "PluginEditor.h"
 
+#include "ImageTheme.h"
+
 #include <BinaryData.h>
 
 // ===========================================================================
@@ -16,25 +18,34 @@ Theme::Theme() {
 }
 
 juce::Colour Theme::accent(int index) {
-    static const juce::uint32 colours[numAccents] = { 0xffC42B2B, 0xffE46A2E, 0xffD9D5CD, 0xff7D78D6 };
-    return juce::Colour(colours[juce::jlimit(0, numAccents - 1, index)]);
+    if (index == imageAccent) return imageColour;
+    static const juce::uint32 colours[numBuiltIn] = { 0xffC42B2B, 0xffE46A2E, 0xffD9D5CD, 0xff7D78D6 };
+    return juce::Colour(colours[juce::jlimit(0, numBuiltIn - 1, index)]);
 }
 
 // Measured: slate, or a clearer blue / neutral grey where slate would sit too close to the accent.
 juce::Colour Theme::measuredFor(int index) {
-    static const juce::uint32 colours[numAccents] = { 0xff6F8296, 0xff6F8296, 0xff4F86D6, 0xff9A9EA4 };
-    return juce::Colour(colours[juce::jlimit(0, numAccents - 1, index)]);
+    if (index == imageAccent) return imageMeasured;
+    static const juce::uint32 colours[numBuiltIn] = { 0xff6F8296, 0xff6F8296, 0xff4F86D6, 0xff9A9EA4 };
+    return juce::Colour(colours[juce::jlimit(0, numBuiltIn - 1, index)]);
 }
 
 // EQ: teal against the warm and violet accents, rose against Bone.
 juce::Colour Theme::eqFor(int index) {
-    static const juce::uint32 colours[numAccents] = { 0xff3CBFA4, 0xff3CBFA4, 0xffD2607E, 0xff3CBFA4 };
-    return juce::Colour(colours[juce::jlimit(0, numAccents - 1, index)]);
+    if (index == imageAccent) return imageEq;
+    static const juce::uint32 colours[numBuiltIn] = { 0xff3CBFA4, 0xff3CBFA4, 0xffD2607E, 0xff3CBFA4 };
+    return juce::Colour(colours[juce::jlimit(0, numBuiltIn - 1, index)]);
+}
+
+juce::Colour Theme::myEqFor(int index) {
+    const bool lightAccent = index == 2 || (index == imageAccent && !imageVivid);
+    return lightAccent ? juce::Colour(0xffB4A6EC) : text;
 }
 
 juce::String Theme::accentName(int index) {
-    static const char* names[numAccents] = { "Blood red", "Ember", "Bone", "Frost" };
-    return names[juce::jlimit(0, numAccents - 1, index)];
+    if (index == imageAccent) return "From your image";
+    static const char* names[numBuiltIn] = { "Blood red", "Ember", "Bone", "Frost" };
+    return names[juce::jlimit(0, numBuiltIn - 1, index)];
 }
 
 namespace {
@@ -382,7 +393,7 @@ void ResponseGraph::paint(juce::Graphics& g) {
     const double k = proc.amount();
     const juce::Colour curveColour = proc.params.getRawParameterValue("bypass")->load() > 0.5f ? juce::Colour(0xff6E7178) : accent;
     // My EQ is off-white, except against Bone where that would match the main curve.
-    const juce::Colour myEqColour = proc.accentIndex == 2 ? juce::Colour(0xffB4A6EC) : Theme::text;
+    const juce::Colour myEqColour = Theme::myEqFor(proc.accentIndex);
     if (proc.editingMyEq && !proc.advancedView) {
         // Editing My EQ: the correction stays in the background.
         if (p != nullptr) paintEq(g, k, juce::Colour(0xff6E7178).withAlpha(0.7f), 2.0f, false);
@@ -1150,7 +1161,7 @@ juce::Image makeDeathTitle(const Theme& theme, juce::Colour accent, float scale,
 BteqEditor::BteqEditor(BteqProcessor& p)
     : AudioProcessorEditor(&p), proc(p), lnf(*theme), graph(p, *theme), filters(p, *theme) {
     setLookAndFeel(&lnf);
-    background = juce::ImageCache::getFromMemory(BinaryData::forest_png, BinaryData::forest_pngSize);
+    loadBackground();
 
     bypassButton.setButtonText("Bypass");
     bypassButton.setClickingTogglesState(true);
@@ -1302,6 +1313,8 @@ void BteqEditor::styleTitleBar() {
 
 void BteqEditor::setAccent(int index) {
     proc.accentIndex = juce::jlimit(0, Theme::numAccents - 1, index);
+    if (proc.accentIndex == Theme::imageAccent && !Theme::hasImage) proc.accentIndex = 0; // the image was removed
+    swatches[(size_t)Theme::imageAccent].getProperties().set("swatch", (juce::int64)Theme::imageColour.getARGB());
     lnf.accentColour = graph.accent = filters.accent = Theme::accent(proc.accentIndex);
     titleImage = makeDeathTitle(*theme, Theme::accent(proc.accentIndex), 3.0f, titleArea);
     swatches[(size_t)proc.accentIndex].setToggleState(true, juce::dontSendNotification);
@@ -1393,9 +1406,10 @@ void BteqEditor::paintContent(juce::Graphics& g) {
     g.fillAll(juce::Colour(0xff0B0C0D));
     if (background.isValid())
         g.drawImageWithin(background, 0, 0, content.getWidth(), content.getHeight(), juce::RectanglePlacement::fillDestination);
-    juce::ColourGradient fog(juce::Colour(0x400A0B0C), bounds.getWidth() * 0.55f, bounds.getHeight() * 0.3f,
-                             juce::Colour(0xe608090A), 0.0f, bounds.getHeight() * 1.05f, true);
-    fog.addColour(0.55, juce::Colour(0x9e0A0B0C));
+    // Haze over the image, tinted by the image's dark tones (neutral for the forest).
+    juce::ColourGradient fog(Theme::fog.withAlpha((juce::uint8)0x40), bounds.getWidth() * 0.55f, bounds.getHeight() * 0.3f,
+                             Theme::fog.darker(0.25f).withAlpha((juce::uint8)0xe6), 0.0f, bounds.getHeight() * 1.05f, true);
+    fog.addColour(0.55, Theme::fog.withAlpha((juce::uint8)0x9e));
     g.setGradientFill(fog);
     g.fillRect(bounds);
 
@@ -1570,8 +1584,10 @@ void BteqEditor::layoutContent() {
     resetButton.setBounds(rFilters.getRight() - 12 - 64, rFilters.getBottom() - 12 - 20, 64, 22);
     savedButton.setBounds(462, 18, 210, 36);
     apoButton.setBounds(savedButton.getX() - 18 - 160, 21, 160, 30);
-    const int dot = 20, dotGap = 6, dotsW = Theme::numAccents * dot + (Theme::numAccents - 1) * dotGap;
-    for (int i = 0; i < Theme::numAccents; ++i)
+    const int shown = Theme::hasImage ? Theme::numAccents : Theme::numBuiltIn;
+    const int dot = 20, dotGap = 6, dotsW = shown * dot + (shown - 1) * dotGap;
+    swatches[(size_t)Theme::imageAccent].setVisible(Theme::hasImage);
+    for (int i = 0; i < shown; ++i)
         swatches[(size_t)i].setBounds(rColour.getX() + (rColour.getWidth() - dotsW) / 2 + i * (dot + dotGap),
                                       rColour.getCentreY() - dot / 2, dot, dot);
 }
@@ -1728,15 +1744,132 @@ void BteqEditor::showScaleMenu() {
     const int sizes[] = { 125, 110, 100, 90, 75, 60, 50 };
     for (int pct : sizes)
         menu.addItem(pct, juce::String(pct) + "%", true, juce::roundToInt(proc.uiScale * 100.0f) == pct);
+    static constexpr int kImage = 1001, kForest = 1002, kBuiltIn = 1010;
+    static const char* builtIn[] = { "Sunset", "Ocean", "Neon", "Moss", "Concrete" };
+    juce::String current;
+    if (auto xml = juce::XmlDocument::parse(settingsFile())) current = xml->getStringAttribute("background");
+    menu.addSectionHeader("Background");
+    menu.addItem(kForest, "Forest", true, !Theme::hasImage);
+    for (int i = 0; i < 5; ++i)
+        menu.addItem(kBuiltIn + i, builtIn[i], true, Theme::hasImage && current == builtIn[i]);
+    menu.addItem(kImage, Theme::hasImage && current == "custom" ? "Your own image (choose another)..." : "Your own image...",
+                 true, Theme::hasImage && current == "custom");
     juce::Component::SafePointer<BteqEditor> safe(this);
-    menu.showMenuAsync(juce::PopupMenu::Options(), [safe](int pct) {
-        if (safe == nullptr || pct <= 0) return;
-        safe->setUiScale((float)pct / 100.0f);
-        juce::XmlElement xml("SETTINGS");
-        xml.setAttribute("uiScale", (double)pct / 100.0);
+    menu.showMenuAsync(juce::PopupMenu::Options(), [safe](int id) {
+        if (safe == nullptr || id <= 0) return;
+        if (id == kImage) { safe->chooseBackground(); return; }
+        if (id == kForest) { safe->useForest(); return; }
+        if (id >= kBuiltIn && id < kBuiltIn + 5) { safe->useBuiltInBackground(builtIn[id - kBuiltIn]); return; }
+        safe->setUiScale((float)id / 100.0f);
+        auto xml = juce::XmlDocument::parse(settingsFile());
+        if (xml == nullptr) xml = std::make_unique<juce::XmlElement>("SETTINGS");
+        xml->setAttribute("uiScale", (double)id / 100.0);
         settingsFile().getParentDirectory().createDirectory();
-        xml.writeTo(settingsFile());
+        xml->writeTo(settingsFile());
     });
+}
+
+// Background ------------------------------------------------------------------
+juce::File BteqEditor::backgroundFile() { return settingsFile().getSiblingFile("background.png"); }
+
+// Uses your image if there is one (picking the colours from it), else the forest.
+void BteqEditor::loadBackground() {
+    juce::Image img;
+    if (backgroundFile().existsAsFile()) img = juce::ImageFileFormat::loadFrom(backgroundFile());
+    Theme::hasImage = img.isValid();
+    if (!img.isValid()) {
+        background = juce::ImageCache::getFromMemory(BinaryData::forest_png, BinaryData::forest_pngSize);
+        Theme::fog = juce::Colour(0xff0A0B0C);
+        return;
+    }
+    background = img;
+    // Colours from a small copy: plenty for picking, and quick.
+    const int w = 96, h = juce::jmax(1, juce::roundToInt(96.0 * img.getHeight() / img.getWidth()));
+    const auto small = img.rescaled(w, h, juce::Graphics::mediumResamplingQuality);
+    std::vector<uint8_t> rgb;
+    rgb.reserve((size_t)(w * h * 3));
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            const auto c = small.getPixelAt(x, y);
+            rgb.push_back(c.getRed());
+            rgb.push_back(c.getGreen());
+            rgb.push_back(c.getBlue());
+        }
+    const auto picked = bteq::imagetheme::pick(rgb);
+    auto colour = [](const bteq::imagetheme::Rgb& c) {
+        return juce::Colour::fromFloatRGBA((float)c.r, (float)c.g, (float)c.b, 1.0f);
+    };
+    Theme::imageColour = colour(picked.accent);
+    Theme::imageMeasured = colour(picked.measured);
+    Theme::imageEq = colour(picked.eq);
+    Theme::fog = colour(picked.fog);
+    Theme::imageVivid = picked.vivid;
+}
+
+void BteqEditor::chooseBackground() {
+    fileChooser = std::make_unique<juce::FileChooser>("Choose a background image", juce::File(), "*.jpg;*.jpeg;*.png;*.gif");
+    juce::Component::SafePointer<BteqEditor> safe(this);
+    fileChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                             [safe](const juce::FileChooser& fc) {
+        if (safe == nullptr || fc.getResult() == juce::File()) return;
+        auto img = juce::ImageFileFormat::loadFrom(fc.getResult());
+        if (!img.isValid()) {
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Background image",
+                                                   "That file couldn't be read as an image.");
+            return;
+        }
+        safe->storeBackground(img, "custom");
+    });
+}
+
+void BteqEditor::useBuiltInBackground(const juce::String& name) {
+    int size = 0;
+    const char* data = BinaryData::getNamedResource((name.toLowerCase() + "_jpg").toRawUTF8(), size);
+    if (data == nullptr) return;
+    storeBackground(juce::ImageFileFormat::loadFrom(data, (size_t)size), name);
+}
+
+// Keeps a copy no bigger than the window at 2x (so it loads fast and survives the
+// original moving), notes which one it is, and switches to its colours.
+void BteqEditor::storeBackground(const juce::Image& source, const juce::String& name) {
+    auto img = source;
+    if (!img.isValid()) return;
+    const double fit = juce::jmax(2160.0 / img.getWidth(), 1360.0 / img.getHeight());
+    if (fit < 1.0)
+        img = img.rescaled(juce::roundToInt(img.getWidth() * fit), juce::roundToInt(img.getHeight() * fit),
+                           juce::Graphics::highResamplingQuality);
+    backgroundFile().getParentDirectory().createDirectory();
+    {
+        juce::FileOutputStream out(backgroundFile());
+        if (!out.openedOk() || !out.setPosition(0) || !out.truncate().wasOk()) return;
+        juce::PNGImageFormat().writeImageToStream(img.convertedToFormat(juce::Image::RGB), out);
+    }
+    auto xml = juce::XmlDocument::parse(settingsFile());
+    if (xml == nullptr) xml = std::make_unique<juce::XmlElement>("SETTINGS");
+    xml->setAttribute("background", name);
+    xml->writeTo(settingsFile());
+    loadBackground();
+    setAccent(Theme::imageAccent); // show the picked colour straight away
+    backgroundChanged();
+}
+
+void BteqEditor::useForest() {
+    backgroundFile().deleteFile();
+    if (auto xml = juce::XmlDocument::parse(settingsFile())) {
+        xml->removeAttribute("background");
+        xml->writeTo(settingsFile());
+    }
+    loadBackground();
+    if (proc.accentIndex == Theme::imageAccent) setAccent(0);
+    backgroundChanged();
+}
+
+void BteqEditor::backgroundChanged() {
+    setAccent(proc.accentIndex);
+    layoutContent();
+    graph.repaint();
+    filters.repaint();
+    content.repaint();
 }
 
 // Editing ---------------------------------------------------------------------
