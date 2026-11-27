@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 
@@ -69,8 +71,15 @@ public:
     void setStateInformation(const void* data, int sizeInBytes) override;
 
     // Used by the editor (message thread only).
-    const bteq::HeadphoneLibrary& library() const { return holder->library; }
-    bool libraryLoaded() const { return holder->loaded; }
+    // The headphone library. In Low memory mode it is only kept while a BEQ window
+    // is open; the processor keeps its own copy of the selected headphone's profiles.
+    const bteq::HeadphoneLibrary& library() const { return lib().library; }
+    bool libraryLoaded() const { return lib().loaded; }
+    bool libraryInMemory() const { const juce::ScopedLock sl(libLock); return holder.has_value(); }
+    // Low memory mode (settings.xml lowMemory), shared by every BEQ in this process.
+    static bool lowMemoryMode() { return lowMemoryFlag().load(); }
+    static void setLowMemoryMode(bool on);
+    void releaseLibraryIfUnused(); // frees it in Low memory mode when no window is open
     void selectHeadphone(const juce::String& name);
     void selectProfile(int indexWithinHeadphone);
     juce::String selectedHeadphone() const { return headphoneName; }
@@ -191,7 +200,18 @@ private:
     std::atomic<double> myEqPreampDb { 0.0 }, myEqRecommended { 0.0 };
     std::atomic<bool> myEqRunning { false };
 
-    juce::SharedResourcePointer<LibraryHolder> holder;
+    mutable juce::CriticalSection libLock;
+    mutable std::optional<juce::SharedResourcePointer<LibraryHolder>> holder;
+    const LibraryHolder& lib() const; // loads it if it isn't in memory
+    // A copy of the selected headphone's library profiles, and the graphic EQ
+    // frequencies, so the processor doesn't need the library while no window is open.
+    mutable std::string cachedHeadphone;
+    mutable std::vector<bteq::HeadphoneProfile> cachedProfiles;
+    mutable std::vector<double> graphicFreqs;
+    mutable int cacheVersion = 0;
+    int builtCacheVersion = -1;
+    const std::vector<double>& graphicFrequencies() const;
+    static std::atomic<bool>& lowMemoryFlag();
     juce::SharedResourcePointer<CustomPresetStore> customs;
     bool customsDirty = false;
     bteq::HeadphoneProfile* selectedCustom(); // the selected profile if it is one of your presets
@@ -271,4 +291,5 @@ private:
     double preampDb = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BteqProcessor)
+    JUCE_DECLARE_WEAK_REFERENCEABLE(BteqProcessor)
 };

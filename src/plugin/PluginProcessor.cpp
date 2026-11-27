@@ -129,11 +129,64 @@ void CustomPresetStore::save() const {
     xml.writeTo(file());
 }
 
+// ---------------------------------------------------------------------------
+// The library, kept only while needed in Low memory mode
+// ---------------------------------------------------------------------------
+std::atomic<bool>& BteqProcessor::lowMemoryFlag() {
+    static std::atomic<bool> flag { [] {
+        const auto f = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                           .getChildFile("Born To EQ The World")
+                           .getChildFile("settings.xml");
+        if (auto xml = juce::XmlDocument::parse(f)) return xml->getBoolAttribute("lowMemory", false);
+        return false;
+    }() };
+    return flag;
+}
+
+void BteqProcessor::setLowMemoryMode(bool on) { lowMemoryFlag() = on; }
+
+const LibraryHolder& BteqProcessor::lib() const {
+    const juce::ScopedLock sl(libLock);
+    if (!holder.has_value()) holder.emplace();
+    if (graphicFreqs.empty()) graphicFreqs = (*holder)->library.graphicFrequencies();
+    return **holder;
+}
+
+const std::vector<double>& BteqProcessor::graphicFrequencies() const {
+    if (graphicFreqs.empty()) lib();
+    return graphicFreqs;
+}
+
+void BteqProcessor::releaseLibraryIfUnused() {
+    if (!lowMemoryMode() || getActiveEditor() != nullptr) return;
+    const juce::ScopedLock sl(libLock);
+    holder.reset(); // freed once no other BEQ in this process holds it
+}
+
 std::vector<const bteq::HeadphoneProfile*> BteqProcessor::profilesFor(const juce::String& headphone) const {
     std::vector<const bteq::HeadphoneProfile*> out;
-    if (headphone.isEmpty() || !holder->loaded) return out;
+    if (headphone.isEmpty()) return out;
     const auto name = headphone.toStdString();
-    if (const auto idx = holder->library.headphoneIndex(name)) out = holder->library.profilesFor(*idx);
+    {
+        const juce::ScopedLock sl(libLock);
+        // The selected headphone comes from the processor's own copy.
+        if (headphone == headphoneName && cachedHeadphone != name) {
+            const auto& l = lib();
+            cachedProfiles.clear();
+            if (l.loaded)
+                if (const auto idx = l.library.headphoneIndex(name))
+                    for (const auto* p : l.library.profilesFor(*idx)) cachedProfiles.push_back(*p);
+            cachedHeadphone = name;
+            ++cacheVersion;
+        }
+        if (name == cachedHeadphone) {
+            for (const auto& p : cachedProfiles) out.push_back(&p);
+        } else {
+            const auto& l = lib();
+            if (l.loaded)
+                if (const auto idx = l.library.headphoneIndex(name)) out = l.library.profilesFor(*idx);
+        }
+    }
     for (const auto& c : customs->presets)
         if (c.name == name) out.push_back(&c);
     return out;
@@ -309,7 +362,7 @@ void BteqProcessor::computeMatch() {
     if (matchName.isEmpty() || p == nullptr) return;
     const auto* lib = curveLibrary();
     if (lib == nullptr) return;
-    const auto& freqs = holder->library.graphicFrequencies();
+    const auto& freqs = graphicFrequencies();
 
     // This headphone: the selected profile's measurement, else its first one.
     auto own = lib->find(p->name, p->source, p->rig, p->originalPreset, p->target).measured;
@@ -370,7 +423,7 @@ const bteq::HeadphoneProfile* BteqProcessor::selectedProfile() const {
 bool BteqProcessor::graphicAvailable() const {
     if (match.active) return true;
     const auto* p = selectedProfile();
-    return p != nullptr && p->hasGraphic() && !holder->library.graphicFrequencies().empty();
+    return p != nullptr && p->hasGraphic() && !graphicFrequencies().empty();
 }
 
 bool BteqProcessor::graphicModeActive() const {
@@ -694,7 +747,7 @@ juce::String BteqProcessor::apoConfigText() const {
             const double pre = preampSettingDb();
             auto gains = graphicShapeDb();
             for (auto& g : gains) g = (g + pre) * k;
-            body.push_back(bteq::apo::graphicLine(holder->library.graphicFrequencies(), gains));
+            body.push_back(bteq::apo::graphicLine(graphicFrequencies(), gains));
         } else {
             const auto preset = effectiveParametric();
             preamp += preset.preampDb * k;
@@ -730,7 +783,7 @@ void BteqProcessor::rebuild(bool force) {
     const auto* p = selectedProfile();
     const double k = juce::jlimit(0.0, 1.0, (double)amountParam->load() / 100.0);
     const bool graphic = graphicModeActive();
-    if (!force && p == builtProfile && std::abs(k - builtAmount) < 1e-4 && juce::exactlyEqual(sampleRate, builtRate) &&
+    if (!force && p == builtProfile && cacheVersion == builtCacheVersion && std::abs(k - builtAmount) < 1e-4 && juce::exactlyEqual(sampleRate, builtRate) &&
         graphic == builtGraphic && editVersion == builtEditVersion)
         return;
 
@@ -740,6 +793,7 @@ void BteqProcessor::rebuild(bool force) {
         buildParametric(p, k, sampleRate);
 
     builtProfile = p;
+    builtCacheVersion = cacheVersion; // a new headphone's copy can reuse the same addresses
     builtAmount = k;
     builtRate = sampleRate;
     builtGraphic = graphic;
@@ -768,7 +822,7 @@ void BteqProcessor::buildParametric(const bteq::HeadphoneProfile*, double k, dou
 }
 
 void BteqProcessor::buildGraphic(const bteq::HeadphoneProfile*, double k, double sr) {
-    const auto& freqs = holder->library.graphicFrequencies();
+    const auto& freqs = graphicFrequencies();
     // Curve shape plus preamp, both scaled by the correction amount. Unedited at 100%
     // this is exactly the published GraphicEQ curve.
     const double pre = preampSettingDb();
@@ -1033,6 +1087,7 @@ void BteqProcessor::setStateInformation(const void* data, int sizeInBytes) {
         myEqKey = editKey(); // the My EQ just read belongs to the selected target
     }
     rebuild(true);
+    releaseLibraryIfUnused(); // a session loaded with no BEQ window open
 }
 
 int BteqProcessor::indexForKey(const juce::String& headphone, const juce::String& key) const {
