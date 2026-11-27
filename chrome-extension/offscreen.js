@@ -43,6 +43,7 @@ async function start(tabId, streamId, settings) {
       chrome.runtime.sendMessage({ target: 'background', type: 'ended', tabId });
     });
   tabs.set(tabId, { stream, source, chain });
+  connectPre(tabs.get(tabId));
   if (c.state === 'suspended') await c.resume();
 }
 
@@ -83,23 +84,41 @@ function dropAnalysers(t) {
   t.analysers = null; t.bins = null;
 }
 
-// The spectrum window: everything BEQ plays (after the master), raw dB per FFT bin.
-// Made when the window first asks and removed a second after it stops asking.
-let masterAnalyser = null, masterBins = null, masterTimer = null;
-function masterSpectrum(fftSize) {
+// The spectrum window: everything BEQ plays, raw dB per FFT bin, either before any EQ
+// (every tab's own sound, summed) or after the master. Made when the window first asks
+// and removed a second after it stops asking.
+let masterAnalyser = null, masterBins = null, masterTimer = null, masterWhere = null, preMix = null;
+function connectPre(t) { if (preMix) t.source.connect(preMix); }
+function unhookAnalyser() {
+  if (!masterAnalyser) return;
+  if (masterWhere === 'pre') {
+    for (const t of tabs.values()) { try { t.source.disconnect(preMix); } catch (_) {} }
+    try { preMix.disconnect(); } catch (_) {}
+    preMix = null;
+  } else {
+    try { master.disconnect(masterAnalyser); } catch (_) {}
+  }
+  masterAnalyser = null; masterBins = null; masterWhere = null;
+}
+function masterSpectrum(fftSize, where) {
   if (!ctx || !master) return null;
+  if (masterAnalyser && masterWhere !== where) unhookAnalyser();
   if (!masterAnalyser) {
     masterAnalyser = ctx.createAnalyser();
     masterAnalyser.smoothingTimeConstant = 0; // the window does its own averaging
-    master.connect(masterAnalyser);
+    masterWhere = where;
+    if (where === 'pre') {
+      preMix = ctx.createGain(); // only feeds the analyser, never the speakers
+      preMix.connect(masterAnalyser);
+      for (const t of tabs.values()) connectPre(t);
+    } else {
+      master.connect(masterAnalyser);
+    }
   }
   if (masterAnalyser.fftSize !== fftSize) { masterAnalyser.fftSize = fftSize; masterBins = null; }
   if (!masterBins) masterBins = new Float32Array(masterAnalyser.frequencyBinCount);
   clearTimeout(masterTimer);
-  masterTimer = setTimeout(() => {
-    try { master.disconnect(masterAnalyser); } catch (_) {}
-    masterAnalyser = null; masterBins = null;
-  }, 1000);
+  masterTimer = setTimeout(unhookAnalyser, 1000);
   masterAnalyser.getFloatFrequencyData(masterBins);
   const out = new Array(masterBins.length);
   for (let i = 0; i < out.length; i++) out[i] = masterBins[i] < -200 ? -200 : Math.round(masterBins[i] * 100) / 100;
@@ -138,7 +157,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   }
   if (msg.type === 'masterSpectrum') {
     const n = [2048, 4096, 8192, 16384, 32768].includes(msg.fftSize) ? msg.fftSize : 8192;
-    reply(masterSpectrum(n));
+    reply(masterSpectrum(n, msg.where === 'post' ? 'post' : 'pre'));
     return false;
   }
   if (msg.type === 'spectrum') {

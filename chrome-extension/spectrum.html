@@ -18,7 +18,7 @@
       <button id="toggleSettings" class="pill small" title="Show or hide the settings">Settings</button>
     </div>
   </header>
-  <div class="sub"><span class="label">Spectrum</span><span class="hint">Everything playing through BEQ, after the master</span><span id="readout" class="readout"></span></div>
+  <div class="sub"><span class="label">Spectrum</span><span id="hint" class="hint"></span><span id="readout" class="readout"></span></div>
 
   <section class="panel plot">
     <canvas id="plot"></canvas>
@@ -26,6 +26,11 @@
   </section>
 
   <section id="settings" class="panel settings">
+    <label>Measure
+      <select id="where">
+        <option value="pre">Before EQ</option>
+        <option value="post">After EQ</option>
+      </select></label>
     <label>Show
       <select id="view">
         <option value="both">Live + average</option>

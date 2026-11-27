@@ -4,7 +4,7 @@ import { applyTheme, loadTheme } from './theme.js';
 
 const $ = (id) => document.getElementById(id);
 // Mastering defaults: a long average, 4.5 dB/oct tilt, 2/3 octave smoothing.
-const DEFAULTS = { view: 'both', avgMs: 6000, block: 8192, overlap: 0.88, slope: 4.5, smooth: 0.6667,
+const DEFAULTS = { where: 'pre', view: 'both', avgMs: 6000, block: 8192, overlap: 0.88, slope: 4.5, smooth: 0.6667,
                    lo: -69, hi: -12, fLo: 20, fHi: 20000, open: true };
 // A full-scale sine reads 0 dB (the analyser's Blackman window and scaling take 13.6 dB off).
 const CAL_DB = -20 * Math.log10(0.42 / 2);
@@ -20,18 +20,20 @@ const save = () => chrome.storage.local.set({ spectrum: cfg });
 
 // ---------------------------------------------------------------- settings
 function showSettings() {
-  for (const k of ['view', 'avgMs', 'block', 'overlap', 'slope', 'smooth']) $(k).value = String(cfg[k]);
+  for (const k of ['where', 'view', 'avgMs', 'block', 'overlap', 'slope', 'smooth']) $(k).value = String(cfg[k]);
   for (const k of ['lo', 'hi', 'fLo', 'fHi']) $(k).value = cfg[k];
   $('settings').hidden = !cfg.open;
+  showHint();
   $('toggleSettings').classList.toggle('on', cfg.open);
   resize();
 }
 
 function bindSettings() {
-  for (const k of ['view', 'avgMs', 'block', 'overlap', 'slope', 'smooth']) {
+  for (const k of ['where', 'view', 'avgMs', 'block', 'overlap', 'slope', 'smooth']) {
     $(k).addEventListener('change', () => {
-      cfg[k] = k === 'view' ? $(k).value : Number($(k).value);
-      if (k === 'block') reset();
+      cfg[k] = k === 'view' || k === 'where' ? $(k).value : Number($(k).value);
+      if (k === 'block' || k === 'where') reset();
+      showHint();
       save();
     });
   }
@@ -54,13 +56,18 @@ function bindSettings() {
   $('reset').addEventListener('click', reset);
 }
 
+function showHint() {
+  $('hint').textContent = cfg.where === 'pre'
+    ? 'Everything playing through BEQ, before any EQ' : 'Everything playing through BEQ, after the EQ and master';
+}
+
 function reset() { avg = null; live = null; frames = 0; }
 
 // ---------------------------------------------------------------- data
 async function poll(now) {
   polling = true;
   let r = null;
-  try { r = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'masterSpectrum', fftSize: cfg.block }); } catch (_) {}
+  try { r = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'masterSpectrum', fftSize: cfg.block, where: cfg.where }); } catch (_) {}
   polling = false;
   idle = !r || !r.playing;
   $('idle').hidden = !idle;

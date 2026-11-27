@@ -31,7 +31,8 @@ No headphone correction: just tone and volume, per tab.
   after it. It only runs while it's on, the tab is on and the curve is
   showing; the audio page drops its analysers a second after nothing asks.
 - **Spectrum ↗** (on the curve box, and in the mixer) opens a separate window
-  showing everything playing through BEQ, after the master: a long-term
+  showing everything playing through BEQ, **before the EQ** (each tab's own
+  sound) or **after** it (Measure setting): a long-term
   average in your colour plus a live line. Settings (remembered): what to
   show, average time (1 s to 30 s, or until Reset), block size, overlap,
   slope (tilt around 1 kHz), smoothing (fractional octave), and the level
