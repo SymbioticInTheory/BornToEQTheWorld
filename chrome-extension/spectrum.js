@@ -1,6 +1,8 @@
-// The spectrum window: everything BEQ plays, after the master. The audio page sends
+// The spectrum window: everything BEQ plays (before or after the EQ), with a tab's EQ
+// drawn over it to tune. The audio page sends
 // raw dB per FFT bin; this page averages (in power), smooths, tilts and draws it.
 import { applyTheme, loadTheme } from './theme.js';
+import { BANDS, GAIN_RANGE, PEAK_Q, Q_MIN, Q_MAX, bandType, bandFreq, bandQ, freqRange, responseDb } from './eq.js';
 
 const $ = (id) => document.getElementById(id);
 // Mastering defaults: a long average, 4.5 dB/oct tilt, 2/3 octave smoothing.
@@ -19,35 +21,109 @@ let mouse = null;
 const save = () => chrome.storage.local.set({ spectrum: cfg });
 
 // ---------------------------------------------------------------- settings
+// Knobs: name, range, how a value reads, and whether the knob turns on a log scale.
+const KNOBS = [
+  { key: 'avgMs', name: 'Average', min: 500, max: 31000, log: true, def: DEFAULTS.avgMs,
+    get: (c) => (c.avgMs > 0 ? c.avgMs : 31000), set: (c, v) => { c.avgMs = v >= 30900 ? 0 : Math.round(v / 100) * 100; },
+    text: (c) => (c.avgMs > 0 ? (c.avgMs / 1000).toFixed(1) + ' s' : 'Until reset'),
+    tip: 'How long the average looks back. All the way up: until you reset it' },
+  { key: 'overlap', name: 'Overlap', min: 0, max: 0.95, def: DEFAULTS.overlap,
+    set: (c, v) => { c.overlap = Math.round(v * 100) / 100; }, text: (c) => Math.round(c.overlap * 100) + '%',
+    tip: 'How much each block overlaps the last: higher updates more often' },
+  { key: 'slope', name: 'Slope', min: -3, max: 9, def: DEFAULTS.slope,
+    set: (c, v) => { c.slope = Math.round(v * 2) / 2; }, text: (c) => c.slope.toFixed(1) + ' dB/oct',
+    tip: 'Tilts the display around 1 kHz, so a balanced mix looks flat (4.5 is common for mastering)' },
+  { key: 'smooth', name: 'Smoothing', min: 0, max: 2, def: DEFAULTS.smooth,
+    set: (c, v) => { c.smooth = Math.round(v * 24) / 24; }, text: (c) => smoothText(c.smooth),
+    tip: 'Averages over this many octaves, so the shape is easier to read' },
+  { key: 'lo', name: 'Range low', min: -150, max: -20, def: DEFAULTS.lo,
+    set: (c, v) => { c.lo = Math.min(Math.round(v), c.hi - 6); }, text: (c) => c.lo + ' dB', tip: 'Level at the bottom of the graph' },
+  { key: 'hi', name: 'Range high', min: -60, max: 20, def: DEFAULTS.hi,
+    set: (c, v) => { c.hi = Math.max(Math.round(v), c.lo + 6); }, text: (c) => c.hi + ' dB', tip: 'Level at the top of the graph' },
+  { key: 'fLo', name: 'Freq low', min: 10, max: 1000, log: true, def: DEFAULTS.fLo,
+    set: (c, v) => { c.fLo = Math.min(Math.round(v), c.fHi / 2); }, text: (c) => hzText(c.fLo), tip: 'Lowest frequency shown' },
+  { key: 'fHi', name: 'Freq high', min: 1000, max: 24000, log: true, def: DEFAULTS.fHi,
+    set: (c, v) => { c.fHi = Math.max(Math.round(v / 100) * 100, c.fLo * 2); }, text: (c) => hzText(c.fHi), tip: 'Highest frequency shown' },
+];
+const hzText = (f) => (f >= 1000 ? (f / 1000).toFixed(f >= 10000 ? 1 : 2) + ' kHz' : Math.round(f) + ' Hz');
+function smoothText(o) {
+  if (o < 1e-3) return 'Off';
+  for (const den of [1, 2, 3, 6, 12, 24])
+    for (let num = 1; num <= 2 * den; num++)
+      if (Math.abs(o - num / den) < 0.004) return (den === 1 ? num : num + '/' + den) + ' oct';
+  return o.toFixed(2) + ' oct';
+}
+
+// A knob like the mixer's master: drag up or down (Shift: fine), scroll, double-click for the default.
+const toPos = (k, v) => (k.log ? Math.log(v / k.min) / Math.log(k.max / k.min) : (v - k.min) / (k.max - k.min));
+const fromPos = (k, p) => { p = Math.min(1, Math.max(0, p)); return k.log ? k.min * Math.pow(k.max / k.min, p) : k.min + p * (k.max - k.min); };
+const knobPoint = (deg, r) => [24 + r * Math.sin((deg * Math.PI) / 180), 24 - r * Math.cos((deg * Math.PI) / 180)];
+const arc = (a0, a1, r) => {
+  const [x0, y0] = knobPoint(a0, r), [x1, y1] = knobPoint(a1, r);
+  return `M ${x0} ${y0} A ${r} ${r} 0 ${a1 - a0 > 180 ? 1 : 0} 1 ${x1} ${y1}`;
+};
+function buildKnobs() {
+  const box = $('knobs');
+  for (const k of KNOBS) {
+    const el = document.createElement('div');
+    el.className = 'knob';
+    el.title = k.tip + '. Drag up or down (Shift: fine), scroll, or double-click for the default.';
+    el.innerHTML = `<span class="label">${k.name}</span>
+      <svg viewBox="0 0 48 48" width="44" height="44" tabindex="0">
+        <circle cx="24" cy="24" r="15" class="knob-body"/><path class="knob-track"/><path class="knob-arc"/>
+        <line x1="24" y1="24" x2="24" y2="12" class="knob-pointer"/></svg>
+      <span class="value"></span>`;
+    const svg = el.querySelector('svg');
+    const value = () => (k.get ? k.get(cfg) : cfg[k.key]);
+    const put = (p) => { k.set(cfg, fromPos(k, p)); onKnob(k.key); };
+    let startY = 0, startP = 0;
+    const move = (e) => put(startP + (startY - e.clientY) / (e.shiftKey ? 800 : 160));
+    svg.addEventListener('pointerdown', (e) => { startY = e.clientY; startP = toPos(k, value()); svg.setPointerCapture(e.pointerId); svg.addEventListener('pointermove', move); });
+    const end = () => svg.removeEventListener('pointermove', move);
+    svg.addEventListener('pointerup', end);
+    svg.addEventListener('pointercancel', end);
+    svg.addEventListener('dblclick', () => { k.set(cfg, k.def); onKnob(k.key); });
+    svg.addEventListener('wheel', (e) => { e.preventDefault(); put(toPos(k, value()) + (e.deltaY < 0 ? 0.01 : -0.01) * (e.shiftKey ? 0.25 : 1)); }, { passive: false });
+    k.el = el;
+    box.appendChild(el);
+  }
+}
+function drawKnobs() {
+  for (const k of KNOBS) {
+    const p = toPos(k, k.get ? k.get(cfg) : cfg[k.key]), a = -135 + 270 * Math.min(1, Math.max(0, p));
+    const zero = k.min < 0 && k.max > 0 ? -135 + 270 * toPos(k, 0) : -135;
+    k.el.querySelector('.knob-track').setAttribute('d', arc(-135, 135, 21));
+    k.el.querySelector('.knob-arc').setAttribute('d', Math.abs(a - zero) < 0.5 ? '' : arc(Math.min(a, zero), Math.max(a, zero), 21));
+    const [x, y] = knobPoint(a, 11);
+    const ptr = k.el.querySelector('.knob-pointer');
+    ptr.setAttribute('x2', x); ptr.setAttribute('y2', y);
+    k.el.querySelector('.value').textContent = k.text(cfg);
+  }
+}
+let saveTimer = null;
+function onKnob() {
+  drawKnobs();
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(save, 400); // written once you stop turning
+  draw();
+}
+
 function showSettings() {
-  for (const k of ['where', 'view', 'avgMs', 'block', 'overlap', 'slope', 'smooth']) $(k).value = String(cfg[k]);
-  for (const k of ['lo', 'hi', 'fLo', 'fHi']) $(k).value = cfg[k];
+  for (const k of ['where', 'view', 'block']) $(k).value = String(cfg[k]);
   $('settings').hidden = !cfg.open;
-  showHint();
+  $('toggleSettings').textContent = cfg.open ? 'Settings ▾' : 'Settings ▸';
   $('toggleSettings').classList.toggle('on', cfg.open);
+  drawKnobs();
+  showHint();
   resize();
 }
 
 function bindSettings() {
-  for (const k of ['where', 'view', 'avgMs', 'block', 'overlap', 'slope', 'smooth']) {
+  for (const k of ['where', 'view', 'block']) {
     $(k).addEventListener('change', () => {
-      cfg[k] = k === 'view' || k === 'where' ? $(k).value : Number($(k).value);
+      cfg[k] = k === 'block' ? Number($(k).value) : $(k).value;
       if (k === 'block' || k === 'where') reset();
       showHint();
-      save();
-    });
-  }
-  const limits = { lo: [-160, 20], hi: [-150, 30], fLo: [10, 10000], fHi: [200, 24000] };
-  for (const k of Object.keys(limits)) {
-    $(k).addEventListener('change', () => {
-      const [a, b] = limits[k];
-      let v = Math.min(b, Math.max(a, Number($(k).value) || DEFAULTS[k]));
-      if (k === 'lo') v = Math.min(v, cfg.hi - 6);
-      if (k === 'hi') v = Math.max(v, cfg.lo + 6);
-      if (k === 'fLo') v = Math.min(v, cfg.fHi / 2);
-      if (k === 'fHi') v = Math.max(v, cfg.fLo * 2);
-      cfg[k] = v;
-      $(k).value = v;
       save();
     });
   }
@@ -166,7 +242,7 @@ function draw() {
     g.beginPath(); g.moveTo(0, y(db)); g.lineTo(W, y(db)); g.stroke();
     if (db > cfg.lo + 2 && db < cfg.hi - 2) g.fillText(String(db), 4 * d, y(db) - 3 * d);
   }
-  if (!avg || idle) { readout(null); return; }
+  if (!avg || idle) { drawEq(); readout(eqReadout()); return; }
 
   const points = Math.max(64, Math.round(W / (2 * d)));
   const color = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
@@ -200,7 +276,9 @@ function draw() {
     g.lineJoin = 'round';
     g.stroke();
   }
+  drawEq();
   // Where the mouse is: frequency and level.
+  if (dragBand >= 0) { readout(eqReadout()); return; }
   if (mouse) {
     const j = Math.round((mouse.x * d / W) * (points - 1));
     if (j >= 0 && j < points) {
@@ -215,6 +293,135 @@ function draw() {
   readout(null);
 }
 function readout(t) { $('readout').textContent = t || ''; }
+
+// ---------------------------------------------------------------- a tab's EQ over the spectrum
+// Drawn on its own +-12 dB scale (labels on the right). Drag a point for frequency and
+// gain, scroll on it for Q, double-click it for 0 dB. Changes go to the tab straight away.
+let eqTabs = {};            // tabs that are on: id -> settings (storage.session "tabs")
+let tuneTab = null;         // the tab whose EQ is drawn, or null
+let dragBand = -1, pushTimer = null;
+const tuned = () => (tuneTab != null ? eqTabs[tuneTab] : null);
+const eqX = (f) => (Math.log2(f / cfg.fLo) / Math.log2(cfg.fHi / cfg.fLo)) * canvas.width;
+const eqY = (db) => canvas.height / 2 - (db / GAIN_RANGE) * (canvas.height / 2 - 10 * (window.devicePixelRatio || 1));
+function nodePos(s, i) { return [eqX(bandFreq(s, i)), eqY(s.gains[i] || 0)]; }
+function nodeAt(px, py) {
+  const s = tuned();
+  if (!s) return -1;
+  const d = window.devicePixelRatio || 1;
+  let best = -1, bestDist = 12 * d;
+  for (let i = 0; i < BANDS.length; i++) {
+    const [x, y] = nodePos(s, i), dist = Math.hypot(x - px, y - py);
+    if (dist < bestDist) { bestDist = dist; best = i; }
+  }
+  return best;
+}
+function drawEq() {
+  const s = tuned();
+  if (!s) return;
+  const W = canvas.width, H = canvas.height, d = window.devicePixelRatio || 1;
+  g.font = `600 ${10 * d}px Barlow, sans-serif`;
+  g.fillStyle = 'rgba(232,228,220,0.55)';
+  g.textAlign = 'right';
+  for (const db of [-12, -6, 0, 6, 12]) g.fillText((db > 0 ? '+' : '') + db, W - 4 * d, eqY(db) + (db === 12 ? 10 : db === -12 ? -3 : 4) * d);
+  g.textAlign = 'left';
+  g.strokeStyle = 'rgba(232,228,220,0.16)';
+  g.lineWidth = 1;
+  g.beginPath(); g.moveTo(0, eqY(0)); g.lineTo(W, eqY(0)); g.stroke();
+  const n = Math.max(100, Math.round(W / (3 * d))), freqs = new Float32Array(n);
+  for (let i = 0; i < n; i++) freqs[i] = cfg.fLo * Math.pow(cfg.fHi / cfg.fLo, i / (n - 1));
+  const db = responseDb(s, freqs);
+  g.beginPath();
+  for (let i = 0; i < n; i++) (i ? g.lineTo : g.moveTo).call(g, (i / (n - 1)) * W, eqY(db[i]));
+  g.strokeStyle = '#F2EEE6';
+  g.lineWidth = 2.5 * d;
+  g.lineJoin = 'round';
+  g.stroke();
+  g.font = `700 ${11 * d}px "Barlow Condensed", sans-serif`;
+  g.textAlign = 'center';
+  for (let i = 0; i < BANDS.length; i++) {
+    const [x, y] = nodePos(s, i), r = 8 * d;
+    if (x < -r || x > W + r) continue;
+    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2);
+    g.fillStyle = i === dragBand ? 'rgba(242,238,230,0.45)' : '#0B0C0D';
+    g.fill();
+    g.strokeStyle = '#F2EEE6'; g.lineWidth = 2 * d; g.stroke();
+    g.fillStyle = '#F2EEE6';
+    g.fillText(String(i + 1), x, y + 4 * d);
+  }
+  g.textAlign = 'left';
+}
+function eqReadout() {
+  const s = tuned();
+  if (!s || dragBand < 0) return null;
+  const i = dragBand, q = bandType(i) === 'peaking' ? '  Q ' + bandQ(s, i).toFixed(2) : '  shelf';
+  return `Band ${i + 1}: ${hzText(bandFreq(s, i))}  ${(s.gains[i] > 0 ? '+' : '') + (s.gains[i] || 0).toFixed(1)} dB${q}`;
+}
+function tune(i, edit) {
+  const s = tuned();
+  if (!s) return;
+  if (!s.freqs) s.freqs = BANDS.slice();
+  if (!s.qs) s.qs = BANDS.map(() => PEAK_Q);
+  edit(s, i);
+  s.preset = '';
+  draw();
+  if (pushTimer) return; // at most every 30 ms
+  pushTimer = setTimeout(() => {
+    pushTimer = null;
+    if (tuned()) chrome.runtime.sendMessage({ target: 'background', type: 'set', tabId: tuneTab, settings: tuned() });
+  }, 30);
+}
+async function refreshTabs() {
+  const { tabs = {} } = await chrome.storage.session.get('tabs');
+  if (dragBand < 0) eqTabs = tabs;
+  const sel = $('tune'), ids = Object.keys(tabs).map(Number);
+  if (tuneTab != null && !tabs[tuneTab]) tuneTab = null;
+  if (tuneTab == null && ids.length && !sel.dataset.chosenNone) tuneTab = ids[0];
+  const opts = [['', 'None']];
+  for (const id of ids) {
+    let title = 'Tab ' + id;
+    try { title = (await chrome.tabs.get(id)).title || title; } catch (_) {}
+    opts.push([String(id), title]);
+  }
+  sel.innerHTML = '';
+  for (const [v, t] of opts) { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.appendChild(o); }
+  sel.value = tuneTab != null ? String(tuneTab) : '';
+  draw();
+}
+function bindEq() {
+  $('tune').addEventListener('change', (e) => {
+    tuneTab = e.target.value ? Number(e.target.value) : null;
+    e.target.dataset.chosenNone = tuneTab == null ? '1' : '';
+    draw();
+  });
+  const pos = (e) => { const d = window.devicePixelRatio || 1; return [e.offsetX * d, e.offsetY * d]; };
+  canvas.addEventListener('pointerdown', (e) => {
+    dragBand = nodeAt(...pos(e));
+    if (dragBand >= 0) canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    const [px, py] = pos(e);
+    canvas.style.cursor = dragBand >= 0 || nodeAt(px, py) >= 0 ? 'grab' : 'crosshair';
+    if (dragBand < 0) return;
+    tune(dragBand, (s, i) => {
+      const [lo, hi] = freqRange(i);
+      const f = cfg.fLo * Math.pow(cfg.fHi / cfg.fLo, Math.min(1, Math.max(0, px / canvas.width)));
+      s.freqs[i] = Math.round(Math.min(hi, Math.max(lo, f)));
+      const d = window.devicePixelRatio || 1;
+      const db = ((canvas.height / 2 - py) / (canvas.height / 2 - 10 * d)) * GAIN_RANGE;
+      s.gains[i] = Math.round(Math.min(GAIN_RANGE, Math.max(-GAIN_RANGE, db)) * 10) / 10;
+    });
+  });
+  const end = () => { if (dragBand >= 0) { dragBand = -1; draw(); } };
+  canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointercancel', end);
+  canvas.addEventListener('wheel', (e) => {
+    const i = nodeAt(...pos(e));
+    if (i < 0 || bandType(i) !== 'peaking') return;
+    e.preventDefault();
+    tune(i, (s) => { s.qs[i] = Math.round(Math.min(Q_MAX, Math.max(Q_MIN, bandQ(s, i) * (e.deltaY < 0 ? 1.1 : 1 / 1.1))) * 100) / 100; });
+  }, { passive: false });
+  chrome.storage.onChanged.addListener((changes, area) => { if (area === 'session' && changes.tabs) refreshTabs(); });
+}
 
 // ---------------------------------------------------------------- loop
 async function frame(now) {
@@ -234,6 +441,7 @@ async function init() {
   theme = await loadTheme();
   await applyTheme(theme, $('title'), null);
   await document.fonts.load('600 11px Barlow').catch(() => {});
+  buildKnobs();
   bindSettings();
   showSettings();
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -248,7 +456,12 @@ async function init() {
   });
   canvas.addEventListener('mousemove', (e) => { mouse = { x: e.offsetX }; });
   canvas.addEventListener('mouseleave', () => { mouse = null; draw(); });
-  canvas.addEventListener('dblclick', reset);
+  canvas.addEventListener('dblclick', (e) => {
+    const d = window.devicePixelRatio || 1, i = nodeAt(e.offsetX * d, e.offsetY * d);
+    if (i >= 0) tune(i, (s) => { s.gains[i] = 0; }); else reset();
+  });
+  bindEq();
+  await refreshTabs();
   requestAnimationFrame(frame);
 }
 
