@@ -7,7 +7,7 @@ import { BANDS, GAIN_RANGE, PEAK_Q, Q_MIN, Q_MAX, bandType, bandFreq, bandQ, fre
 const $ = (id) => document.getElementById(id);
 // Mastering defaults: a long average, 4.5 dB/oct tilt, 2/3 octave smoothing.
 const DEFAULTS = { where: 'pre', view: 'both', avgMs: 6000, block: 8192, overlap: 0.88, slope: 4.5, smooth: 0.6667,
-                   lo: -69, hi: -12, fLo: 20, fHi: 20000, open: true };
+                   lo: -69, hi: -12, fLo: 20, fHi: 20000, open: true, showEq: true };
 // A full-scale sine reads 0 dB (the analyser's Blackman window and scaling take 13.6 dB off).
 const CAL_DB = -20 * Math.log10(0.42 / 2);
 
@@ -113,7 +113,14 @@ function onKnob() {
   draw();
 }
 
+function showEqButton() {
+  const on = cfg.showEq !== false;
+  $('showEq').classList.toggle('on', on);
+  $('showEq').textContent = on ? 'EQ shown' : 'EQ hidden';
+}
+
 function showSettings() {
+  showEqButton();
   for (const k of ['where', 'view', 'block']) $(k).value = String(cfg[k]);
   $('settings').hidden = !cfg.open;
   $('toggleSettings').textContent = cfg.open ? 'Settings ▾' : 'Settings ▸';
@@ -177,6 +184,7 @@ function bindRange() {
 }
 
 function bindSettings() {
+  $('showEq').addEventListener('click', () => { cfg.showEq = cfg.showEq === false; showEqButton(); save(); draw(); });
   const sm = $('smooth');
   SMOOTH_STEPS.forEach(([, name], i) => sm.add(new Option(i === 0 ? 'Off' : name + ' oct', String(i))));
   sm.addEventListener('change', () => { cfg.smooth = SMOOTH_STEPS[Number(sm.value)][0]; onKnob(); });
@@ -189,7 +197,7 @@ function bindSettings() {
       save();
     });
   }
-  $('defaults').addEventListener('click', () => { cfg = { ...DEFAULTS, open: cfg.open }; reset(); save(); showSettings(); });
+  $('defaults').addEventListener('click', () => { cfg = { ...DEFAULTS, open: cfg.open, showEq: cfg.showEq }; reset(); save(); showSettings(); });
   $('toggleSettings').addEventListener('click', () => { cfg.open = !cfg.open; save(); showSettings(); });
   $('reset').addEventListener('click', reset);
 }
@@ -365,7 +373,7 @@ function readout(t) { $('readout').textContent = t || ''; }
 let eqTabs = {};            // tabs that are on: id -> settings (storage.session "tabs")
 let tuneTab = null;         // the tab shown (its spectrum and its EQ), or null for all of Chrome
 let dragBand = -1, pushTimer = null;
-const tuned = () => (tuneTab != null ? eqTabs[tuneTab] : null);
+const tuned = () => (tuneTab != null && cfg.showEq !== false ? eqTabs[tuneTab] : null); // hidden: just the spectrum (the EQ still plays)
 const eqX = (f) => (Math.log2(f / cfg.fLo) / Math.log2(cfg.fHi / cfg.fLo)) * canvas.width;
 const eqY = (db) => canvas.height / 2 - (db / GAIN_RANGE) * (canvas.height / 2 - 10 * (window.devicePixelRatio || 1));
 function nodePos(s, i) { return [eqX(bandFreq(s, i)), eqY(s.gains[i] || 0)]; }
