@@ -69,6 +69,17 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         await stopTab(msg.tabId);
         reply({ ok: true });
         return;
+      case 'openMixer': {
+        // One mixer window: bring it forward if it is already open.
+        const { mixerWindow } = await chrome.storage.session.get('mixerWindow');
+        if (mixerWindow != null) {
+          try { await chrome.windows.update(mixerWindow, { focused: true }); reply({ ok: true }); return; } catch (_) {}
+        }
+        const w = await chrome.windows.create({ url: 'mixer.html', type: 'popup', width: 500, height: 720 });
+        await chrome.storage.session.set({ mixerWindow: w.id });
+        reply({ ok: true });
+        return;
+      }
       case 'ended': // the tab's stream stopped by itself (tab closed, capture ended)
         await stopTab(msg.tabId);
         reply({ ok: true });
@@ -80,3 +91,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => { stopTab(tabId); });
+chrome.windows.onRemoved.addListener(async (id) => {
+  const { mixerWindow } = await chrome.storage.session.get('mixerWindow');
+  if (mixerWindow === id) await chrome.storage.session.remove('mixerWindow');
+});

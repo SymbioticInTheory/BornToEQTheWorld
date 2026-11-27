@@ -21,3 +21,19 @@ No headphone correction: just tone and volume, per tab.
   tab by the EQ's highest boost so boosts can't clip.
 - Pick a standard preset, or **Save** your own profiles (kept in Chrome).
 - The four dots pick the colour, like in the plugin.
+
+## Mixer
+
+**Mixer** in the popup opens a separate window that stays open. It lists every
+tab playing sound:
+
+- Tabs that are on get a level slider, a preset menu, **Mute**, and **EQ**
+  (the full EQ for that tab, inside the same window).
+- Other tabs playing sound can be muted from there. To turn one on, Chrome
+  still needs one click on the BEQ icon while you're on that tab (once per page
+  load); after that it can be switched on and off from the mixer.
+- Click a tab's name to jump to it.
+
+The mixer needs Chrome's "tabs" permission to show tab titles and icons, so
+Chrome lists the extension as able to read your browsing history. Nothing
+leaves your computer.

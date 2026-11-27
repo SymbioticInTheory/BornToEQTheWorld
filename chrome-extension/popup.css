@@ -42,6 +42,9 @@ body {
 
 header { display: flex; align-items: center; justify-content: space-between; height: 44px; }
 #title { height: 40px; margin-left: -6px; }
+.head-buttons { display: flex; gap: 6px; }
+/* Opened inside the mixer window rather than as the toolbar popup. */
+body.window { width: auto; min-height: 100vh; }
 
 .sub { display: flex; gap: 10px; align-items: baseline; margin: 2px 0 8px; min-width: 0; }
 #tabName { color: var(--soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -143,3 +146,5 @@ footer { display: flex; align-items: center; justify-content: space-between; gap
   -webkit-mask: url(assets/lagrangian.png) right center / contain no-repeat;
   mask: url(assets/lagrangian.png) right center / contain no-repeat;
 }
+[hidden] { display: none !important; }
+body.window { overflow-x: hidden; }

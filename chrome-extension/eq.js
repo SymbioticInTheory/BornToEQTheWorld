@@ -67,7 +67,7 @@ export function applySettings(chain, s, ctx, smooth = true) {
     if (smooth) f.gain.setTargetAtTime(g, t, 0.007); else f.gain.value = g;
   });
   const headroom = s.headroom ? -maxBoostDbFor(s.gains) : 0;
-  const lin = Math.pow(10, (s.level + headroom) / 20);
+  const lin = s.muted ? 0 : Math.pow(10, (s.level + headroom) / 20);
   if (smooth) chain.gain.gain.setTargetAtTime(lin, t, 0.007); else chain.gain.gain.value = lin;
 }
 
@@ -92,4 +92,17 @@ export function responseDb(gains, freqs) {
     for (let i = 0; i < n; i++) total[i] += 20 * Math.log10(mag[i]);
   }
   return total;
+}
+
+// Picks a preset ('p:Rock') or one of your profiles ('u:name') into settings.
+export function applyPreset(s, key, profiles) {
+  if (key.startsWith('p:') && PRESETS[key.slice(2)]) s.gains = PRESETS[key.slice(2)].slice();
+  if (key.startsWith('u:') && profiles[key.slice(2)]) {
+    const p = profiles[key.slice(2)];
+    s.gains = p.gains.slice();
+    s.level = p.level;
+    s.headroom = p.headroom;
+  }
+  s.preset = key;
+  return s;
 }

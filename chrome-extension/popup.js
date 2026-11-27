@@ -1,4 +1,9 @@
-import { BANDS, BAND_LABELS, GAIN_RANGE, PRESETS, defaultSettings, responseDb, maxBoostDbFor } from './eq.js';
+import { BANDS, BAND_LABELS, GAIN_RANGE, PRESETS, defaultSettings, responseDb, maxBoostDbFor, applyPreset } from './eq.js';
+
+// popup.html?tab=ID&from=mixer edits that tab inside the mixer window.
+const params = new URLSearchParams(location.search);
+const fixedTab = params.has('tab') ? Number(params.get('tab')) : null;
+const fromMixer = params.get('from') === 'mixer';
 
 const ACCENTS = ['#C42B2B', '#E46A2E', '#D9D5CD', '#7D78D6'];
 const ACCENT_NAMES = ['Blood red', 'Ember', 'Bone', 'Frost'];
@@ -25,13 +30,17 @@ const send = (msg) => chrome.runtime.sendMessage({ target: 'background', ...msg 
 async function startTab() {
   try {
     const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+    settings.muted = false;
     const r = await send({ type: 'start', tabId, streamId, settings });
     if (!r || !r.ok) throw new Error(r && r.error);
     active = true;
     status('');
   } catch (e) {
     active = false;
-    status("This tab can't be EQ'd" + (e && e.message ? ': ' + e.message : '.'));
+    const msg = e && e.message ? String(e.message) : '';
+    status(/invoked/.test(msg)
+      ? 'Chrome needs one click on the BEQ icon while you are on this tab first.'
+      : "This tab can't be EQ'd" + (msg ? ': ' + msg : '.'));
   }
   render();
 }
@@ -181,7 +190,7 @@ function render() {
 
   $('level').value = settings.level;
   const headroomDb = settings.headroom ? maxBoostDbFor(settings.gains) : 0;
-  $('levelValue').textContent = fmt(settings.level) + ' dB';
+  $('levelValue').textContent = settings.muted ? 'Muted' : fmt(settings.level) + ' dB';
   $('levelValue').title = settings.headroom && headroomDb > 0.05
     ? `Plus ${fmt(-headroomDb)} dB headroom for the EQ's boosts` : '';
   $('headroom').classList.toggle('on', settings.headroom);
@@ -195,7 +204,17 @@ function render() {
 
 // ---------------------------------------------------------------- start
 async function init() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  let tab = null;
+  if (fixedTab != null) {
+    try { tab = await chrome.tabs.get(fixedTab); } catch (_) {}
+  } else {
+    [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  }
+  if (fromMixer) {
+    document.body.classList.add('window');
+    $('mixer').textContent = '‹ Mixer';
+    $('mixer').title = 'Back to the mixer';
+  }
   tabId = tab ? tab.id : null;
   $('tabName').textContent = tab ? tab.title : '';
   const last = await loadLocal();
@@ -210,20 +229,27 @@ async function init() {
   settings = Object.assign(defaultSettings(), (state && state.settings) || last || {});
   if (!active) status('Off: this tab plays as normal. Turn it on to EQ it.');
 
+  $('mixer').addEventListener('click', async () => {
+    if (fromMixer) { location.href = 'mixer.html'; return; }
+    await send({ type: 'openMixer' });
+    window.close();
+  });
+  // Follow changes made elsewhere (the mixer, or this tab's popup).
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes.profiles) { profiles = changes.profiles.newValue || {}; buildPresetList(); render(); }
+    if (area === 'local' && changes.accent) { accent = changes.accent.newValue ?? 0; render(); }
+    if (area !== 'session' || !changes.tabs || tabId == null || pushTimer) return;
+    const t = (changes.tabs.newValue || {})[tabId];
+    const nowActive = !!t;
+    if (t && JSON.stringify(t) !== JSON.stringify(settings)) settings = Object.assign(defaultSettings(), t);
+    if (nowActive !== active || t) { active = nowActive; render(); }
+  });
   $('power').addEventListener('click', () => (active ? stopTab() : startTab()));
   $('level').addEventListener('input', (e) => { settings.level = Number(e.target.value); changed(); });
   $('level').addEventListener('dblclick', () => { settings.level = 0; changed(); });
   $('headroom').addEventListener('click', () => { settings.headroom = !settings.headroom; changed(); });
   $('preset').addEventListener('change', (e) => {
-    const v = e.target.value;
-    if (v.startsWith('p:')) settings.gains = PRESETS[v.slice(2)].slice();
-    if (v.startsWith('u:')) {
-      const p = profiles[v.slice(2)];
-      settings.gains = p.gains.slice();
-      settings.level = p.level;
-      settings.headroom = p.headroom;
-    }
-    settings.preset = v;
+    applyPreset(settings, e.target.value, profiles);
     changed();
   });
   $('save').addEventListener('click', async () => {
