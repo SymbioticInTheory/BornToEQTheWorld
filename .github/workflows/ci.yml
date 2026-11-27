@@ -34,3 +34,19 @@ jobs:
           path: |
             build/BornToEQTheWorld_artefacts/Release/VST3/
             build/BornToEQTheWorld_artefacts/Release/Standalone/*.exe
+
+  chrome-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check the scripts
+        run: for f in chrome-extension/*.js; do node --check "$f"; done
+      - name: Check the manifest
+        run: node -e "JSON.parse(require('fs').readFileSync('chrome-extension/manifest.json','utf8'))"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BEQ-Tab-EQ
+          path: chrome-extension/
