@@ -22,9 +22,9 @@
 * { box-sizing: border-box; }
 html { background: var(--bg); }
 body {
-  width: 440px;
+  width: 400px;
   margin: 0;
-  padding: 12px 14px 10px;
+  padding: 10px 12px 8px;
   color: var(--text);
   font: 400 13px Barlow, system-ui, sans-serif;
   /* Haze over the image, tinted by your image's dark tones (neutral for the forest). */
@@ -44,8 +44,8 @@ body {
 }
 .value { font: 700 13px "Barlow Condensed", sans-serif; letter-spacing: 0.08em; color: var(--text); }
 
-header { display: flex; align-items: center; justify-content: space-between; height: 44px; }
-#title { height: 40px; margin-left: -6px; }
+header { display: flex; align-items: center; justify-content: space-between; height: 40px; }
+#title { height: 34px; margin-left: -6px; }
 .head-buttons { display: flex; gap: 6px; }
 /* Opened inside the mixer window rather than as the toolbar popup. */
 body.window { width: auto; min-height: 100vh; }
@@ -57,15 +57,29 @@ body.window { width: auto; min-height: 100vh; }
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 10px 12px;
-  margin-bottom: 8px;
+  padding: 7px 10px 8px;
+  margin-bottom: 6px;
 }
 
-.graph { padding: 6px; }
-#curve { width: 100%; height: 124px; display: block; }
+/* Box titles: click to fold a box away (remembered). */
+.box-head { display: flex; align-items: center; justify-content: space-between; height: 20px; margin-bottom: 4px; }
+.fold {
+  border: 0; background: none; padding: 0 4px 0 0; cursor: pointer;
+  font: 700 11px "Barlow Condensed", sans-serif; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted);
+}
+.fold::before { content: "\25BE"; display: inline-block; width: 12px; color: var(--soft); }
+.fold:hover { color: var(--text); }
+.collapsed .fold::before { content: "\25B8"; }
+.collapsed .box-head { margin-bottom: 0; }
+.collapsed .box-body, .collapsed #analyser { display: none; }
+.pill.tiny { height: 20px; padding: 0 8px; font-size: 10px; letter-spacing: 0.12em; }
+
+.graph { padding: 6px 6px 6px; }
+.graph .box-head { padding: 0 4px; }
+#curve { width: 100%; height: 100px; display: block; }
 
 .bands { display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; }
-.band { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.band { display: flex; flex-direction: column; align-items: center; gap: 3px; }
 .band .value { font-size: 12px; min-height: 15px; }
 .band .label { font-size: 11px; letter-spacing: 0.06em; }
 /* Frequency and Q: drag up or down to change them. */
@@ -79,7 +93,7 @@ body.window { width: auto; min-height: 100vh; }
   writing-mode: vertical-lr;
   direction: rtl;
   width: 22px;
-  height: 120px;
+  height: 96px;
 }
 
 input[type=range] { appearance: none; background: transparent; cursor: ns-resize; }
@@ -108,7 +122,7 @@ input[type=range]:focus { outline: none; }
 
 .presets { display: flex; gap: 8px; }
 select, .btn {
-  height: 30px;
+  height: 28px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.16);
   background: var(--field);
@@ -122,7 +136,7 @@ select option, select optgroup { background: #141517; color: var(--text); }
 .btn:disabled { opacity: 0.35; cursor: default; }
 
 .pill {
-  height: 30px;
+  height: 28px;
   padding: 0 16px;
   border-radius: 15px;
   border: 1px solid rgba(255, 255, 255, 0.16);

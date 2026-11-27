@@ -13,11 +13,16 @@ let active = false;
 let settings = defaultSettings();
 let profiles = {};   // your saved profiles: name -> settings
 let theme = { accent: 0, image: null }; // colour, and your background image if any
+let folded = {};     // boxes you folded away: { graph, bands } (storage.local "folded")
+let analyserOn = false; // live spectrum on the curve (storage.local "analyser")
+let spectrum = null; // last { pre, post } from the audio page
 
 // ---------------------------------------------------------------- storage
 async function loadLocal() {
-  const s = await chrome.storage.local.get(['profiles', 'lastSettings']);
+  const s = await chrome.storage.local.get(['profiles', 'lastSettings', 'folded', 'analyser']);
   profiles = s.profiles || {};
+  folded = s.folded || {};
+  analyserOn = !!s.analyser;
   theme = await loadTheme();
   return s.lastSettings || null;
 }
@@ -177,10 +182,11 @@ function drawCurve() {
   g.beginPath(); g.moveTo(0, y(0)); g.lineTo(W, y(0)); g.stroke();
   [['100', 100], ['1k', 1000], ['10k', 10000]].forEach(([t, f]) => g.fillText(t, x(f) + 4, H - 6));
 
-  const n = 300, freqs = new Float32Array(n);
-  for (let i = 0; i < n; i++) freqs[i] = 20 * Math.pow(1000, i / (n - 1));
-  const db = responseDb(settings, freqs);
   const color = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+  if (spectrum && analyserOn && active) drawSpectrum(g, W, H, color);
+
+  const { freqs, db } = curveData();
+  const n = freqs.length;
   // Soft fill under the curve, then the line.
   g.beginPath();
   g.moveTo(0, y(0));
@@ -197,7 +203,78 @@ function drawCurve() {
   g.stroke();
 }
 
+// The EQ's response, worked out again only when the settings change.
+let curveKey = '', curveCache = null;
+function curveData() {
+  const key = JSON.stringify([settings.gains, settings.freqs, settings.qs]);
+  if (key !== curveKey || !curveCache) {
+    const n = 300, freqs = new Float32Array(n);
+    for (let i = 0; i < n; i++) freqs[i] = 20 * Math.pow(1000, i / (n - 1));
+    curveCache = { freqs, db: responseDb(settings, freqs) };
+    curveKey = key;
+  }
+  return curveCache;
+}
+
+// What the tab is playing, behind the curve: grey before the EQ, your colour after it.
+// Its own scale: -100 dBFS at the bottom to -10 dBFS at the top.
+function drawSpectrum(g, W, H, color) {
+  const lo = -100, hi = -10;
+  const path = (raw) => {
+    // A light smoothing across neighbours, so noise reads as a shape rather than fuzz.
+    const n = raw.length, vals = raw.map((v, i) => (raw[Math.max(0, i - 1)] + 2 * v + raw[Math.min(n - 1, i + 1)]) / 4);
+    g.beginPath();
+    g.moveTo(0, H);
+    for (let i = 0; i < n; i++) {
+      const v = Math.min(hi, Math.max(lo, vals[i]));
+      g.lineTo(((i + 0.5) / n) * W, H - ((v - lo) / (hi - lo)) * H);
+    }
+    g.lineTo(W, H);
+  };
+  path(spectrum.pre);
+  const fill = g.createLinearGradient(0, 0, 0, H);
+  fill.addColorStop(0, 'rgba(200,198,192,0.20)');
+  fill.addColorStop(1, 'rgba(200,198,192,0.04)');
+  g.fillStyle = fill;
+  g.fill();
+  path(spectrum.post);
+  g.strokeStyle = color + '80';
+  g.lineWidth = 1.5;
+  g.stroke();
+}
+
+// About 30 times a second while the analyser is on, the tab is on and the curve is showing.
+let analyserRunning = false;
+function analyserWanted() { return analyserOn && active && !folded.graph && !document.hidden && tabId != null; }
+async function analyserLoop() {
+  if (analyserRunning) return;
+  analyserRunning = true;
+  let last = 0;
+  while (analyserWanted()) {
+    const now = performance.now();
+    if (now - last >= 33) {
+      last = now;
+      try {
+        spectrum = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'spectrum', tabId });
+      } catch (_) { spectrum = null; }
+      drawCurve();
+    }
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  analyserRunning = false;
+  spectrum = null;
+  drawCurve();
+}
+
+function applyFolds() {
+  $('graphBox').classList.toggle('collapsed', !!folded.graph);
+  $('bandsBox').classList.toggle('collapsed', !!folded.bands);
+  $('analyser').classList.toggle('on', analyserOn);
+  if (analyserWanted()) analyserLoop();
+}
+
 function render() {
+  applyFolds();
   applyTheme(theme, $('title'), $('swatches'));
 
   $('power').textContent = active ? 'On' : 'Off';
@@ -278,6 +355,17 @@ async function init() {
     if (nowActive !== active || t) { active = nowActive; render(); }
   });
   $('power').addEventListener('click', () => (active ? stopTab() : startTab()));
+  document.querySelectorAll('.fold').forEach((b) => b.addEventListener('click', () => {
+    folded[b.dataset.box] = !folded[b.dataset.box];
+    chrome.storage.local.set({ folded });
+    render();
+  }));
+  $('analyser').addEventListener('click', () => {
+    analyserOn = !analyserOn;
+    chrome.storage.local.set({ analyser: analyserOn });
+    render();
+  });
+  document.addEventListener('visibilitychange', () => applyFolds());
   $('level').addEventListener('input', (e) => { settings.level = Number(e.target.value); changed(); });
   $('level').addEventListener('dblclick', () => { settings.level = 0; changed(); });
   $('headroom').addEventListener('click', () => { settings.headroom = !settings.headroom; changed(); });

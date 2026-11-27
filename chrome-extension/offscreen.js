@@ -46,9 +46,47 @@ async function start(tabId, streamId, settings) {
   if (c.state === 'suspended') await c.resume();
 }
 
+// ---------------------------------------------------------------- analyser
+// Only while a BEQ window asks for it: the analysers are made on the first request
+// and removed again when nothing has asked for a second.
+const POINTS = 160; // log-spaced, 20 Hz to 20 kHz
+function analyse(t) {
+  if (!t.analysers) {
+    const make = () => { const a = ctx.createAnalyser(); a.fftSize = 8192; a.smoothingTimeConstant = 0.75; return a; };
+    t.analysers = { pre: make(), post: make() };
+    t.source.connect(t.analysers.pre);
+    t.chain.output.connect(t.analysers.post);
+    t.bins = new Float32Array(t.analysers.pre.frequencyBinCount);
+  }
+  clearTimeout(t.analyserTimer);
+  t.analyserTimer = setTimeout(() => dropAnalysers(t), 1000);
+  const hz = ctx.sampleRate / t.analysers.pre.fftSize;
+  const read = (a) => {
+    a.getFloatFrequencyData(t.bins);
+    const out = new Array(POINTS);
+    for (let i = 0; i < POINTS; i++) {
+      // The loudest bin in each slice, so narrow peaks aren't lost at high frequencies.
+      const lo = 20 * Math.pow(1000, i / POINTS), hi = 20 * Math.pow(1000, (i + 1) / POINTS);
+      let b0 = Math.floor(lo / hz), b1 = Math.max(b0, Math.ceil(hi / hz) - 1), m = -200;
+      for (let b = b0; b <= b1 && b < t.bins.length; b++) m = Math.max(m, t.bins[b]);
+      out[i] = Math.round(Math.max(-200, m) * 10) / 10;
+    }
+    return out;
+  };
+  return { pre: read(t.analysers.pre), post: read(t.analysers.post) };
+}
+function dropAnalysers(t) {
+  if (!t.analysers) return;
+  clearTimeout(t.analyserTimer);
+  try { t.source.disconnect(t.analysers.pre); } catch (_) {}
+  try { t.chain.output.disconnect(t.analysers.post); } catch (_) {}
+  t.analysers = null; t.bins = null;
+}
+
 function stop(tabId) {
   const t = tabs.get(tabId);
   if (!t) return;
+  dropAnalysers(t);
   t.source.disconnect();
   t.chain.output.disconnect();
   t.stream.getTracks().forEach((tr) => tr.stop());
@@ -73,6 +111,11 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     const t = tabs.get(msg.tabId);
     if (t) applySettings(t.chain, msg.settings, audio());
     reply({ ok: !!t });
+    return false;
+  }
+  if (msg.type === 'spectrum') {
+    const t = tabs.get(msg.tabId);
+    reply(t && ctx ? analyse(t) : null);
     return false;
   }
   if (msg.type === 'stop') {
