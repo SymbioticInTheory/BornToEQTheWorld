@@ -195,8 +195,11 @@ function bindSettings() {
 }
 
 function showHint() {
-  $('hint').textContent = cfg.where === 'pre'
-    ? 'Everything playing through BEQ, before any EQ' : 'Everything playing through BEQ, after the EQ and master';
+  const sel = $('tune'), name = tuneTab != null && sel.selectedOptions[0] ? sel.selectedOptions[0].textContent : null;
+  $('hint').textContent = name
+    ? (cfg.where === 'pre' ? `${name}, before its EQ` : `${name}, after its EQ`)
+    : (cfg.where === 'pre' ? 'Everything playing through BEQ, before any EQ' : 'Everything playing through BEQ, after the EQ and master');
+  $('hint').title = $('hint').textContent;
 }
 
 function reset() { avg = null; live = null; frames = 0; }
@@ -205,9 +208,9 @@ function reset() { avg = null; live = null; frames = 0; }
 async function poll(now) {
   polling = true;
   let r = null;
-  try { r = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'masterSpectrum', fftSize: cfg.block, where: cfg.where }); } catch (_) {}
+  try { r = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'masterSpectrum', fftSize: cfg.block, where: cfg.where, tabId: tuneTab }); } catch (_) {}
   polling = false;
-  idle = !r || !r.playing;
+  idle = !r || !r.playing || !r.db;
   $('idle').hidden = !idle;
   if (!r) return;
   rate = r.rate;
@@ -360,7 +363,7 @@ function readout(t) { $('readout').textContent = t || ''; }
 // Drawn on its own +-12 dB scale (labels on the right). Drag a point for frequency and
 // gain, scroll on it for Q, double-click it for 0 dB. Changes go to the tab straight away.
 let eqTabs = {};            // tabs that are on: id -> settings (storage.session "tabs")
-let tuneTab = null;         // the tab whose EQ is drawn, or null
+let tuneTab = null;         // the tab shown (its spectrum and its EQ), or null for all of Chrome
 let dragBand = -1, pushTimer = null;
 const tuned = () => (tuneTab != null ? eqTabs[tuneTab] : null);
 const eqX = (f) => (Math.log2(f / cfg.fLo) / Math.log2(cfg.fHi / cfg.fLo)) * canvas.width;
@@ -436,9 +439,11 @@ async function refreshTabs() {
   const { tabs = {} } = await chrome.storage.session.get('tabs');
   if (dragBand < 0) eqTabs = tabs;
   const sel = $('tune'), ids = Object.keys(tabs).map(Number);
+  const before = tuneTab;
   if (tuneTab != null && !tabs[tuneTab]) tuneTab = null;
-  if (tuneTab == null && ids.length && !sel.dataset.chosenNone) tuneTab = ids[0];
-  const opts = [['', 'None']];
+  if (tuneTab == null && ids.length && !sel.dataset.chosenAll) tuneTab = ids[0];
+  if (tuneTab !== before) reset();
+  const opts = [['', 'All of Chrome (no EQ)']];
   for (const id of ids) {
     let title = 'Tab ' + id;
     try { title = (await chrome.tabs.get(id)).title || title; } catch (_) {}
@@ -447,12 +452,15 @@ async function refreshTabs() {
   sel.innerHTML = '';
   for (const [v, t] of opts) { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.appendChild(o); }
   sel.value = tuneTab != null ? String(tuneTab) : '';
+  showHint();
   draw();
 }
 function bindEq() {
   $('tune').addEventListener('change', (e) => {
     tuneTab = e.target.value ? Number(e.target.value) : null;
-    e.target.dataset.chosenNone = tuneTab == null ? '1' : '';
+    e.target.dataset.chosenAll = tuneTab == null ? '1' : '';
+    reset(); // a new source: start the average again
+    showHint();
     draw();
   });
   const pos = (e) => { const d = window.devicePixelRatio || 1; return [e.offsetX * d, e.offsetY * d]; };
