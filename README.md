@@ -28,6 +28,15 @@ Step 1 (DSP core) is done. Step 2 (headphone library) is in progress.
 - `tools/build_library.py`: regenerates the library from AutoEQ, OPRA and the
   extra-target results.
 
+## Your own background
+
+Right-click anywhere in the plugin or standalone and pick **Background > Your
+own image...**. BEQ keeps a copy next to `settings.xml` (in
+`%APPDATA%/Born To EQ The World`) and picks its colours from it
+(`src/plugin/ImageTheme.h`): an accent for a fifth colour dot, a tint for the
+haze over the image, and advanced-view curve colours that stay clear of the
+accent. **Forest** goes back to the original.
+
 ## Build and test
 
 ```

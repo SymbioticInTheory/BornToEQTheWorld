@@ -6,6 +6,8 @@
 /* BEQ's colours. --accent is set from the chosen colour dot. */
 :root {
   --accent: #C42B2B;
+  --fog: #0A0B0C;
+  --bg-image: url(assets/forest.jpg);
   --bg: #0B0C0D;
   --panel: rgba(12, 13, 15, 0.74);
   --border: rgba(255, 255, 255, 0.09);
@@ -25,9 +27,11 @@ body {
   padding: 12px 14px 10px;
   color: var(--text);
   font: 400 13px Barlow, system-ui, sans-serif;
+  /* Haze over the image, tinted by your image's dark tones (neutral for the forest). */
   background:
-    radial-gradient(ellipse at 60% 25%, rgba(10, 11, 12, 0.25), rgba(10, 11, 12, 0.62) 55%, rgba(8, 9, 10, 0.9) 100%),
-    url(assets/forest.jpg) center / cover no-repeat,
+    radial-gradient(ellipse at 60% 25%, color-mix(in srgb, var(--fog) 25%, transparent),
+                    color-mix(in srgb, var(--fog) 62%, transparent) 55%, color-mix(in srgb, var(--fog) 90%, transparent) 100%),
+    var(--bg-image) center / cover no-repeat,
     var(--bg);
   user-select: none;
 }

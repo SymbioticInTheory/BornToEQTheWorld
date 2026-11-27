@@ -1,15 +1,14 @@
 // The mixer window: every tab playing sound in one place, with a level for
 // each tab that is EQ'd and a mute for the rest.
+import { applyTheme as paintTheme, buildSwatches as buildThemeSwatches, imageFromFile, IMAGE_ACCENT, loadTheme } from './theme.js';
 import { PRESETS, defaultSettings, applyPreset } from './eq.js';
 
-const ACCENTS = ['#C42B2B', '#E46A2E', '#D9D5CD', '#7D78D6'];
-const ACCENT_NAMES = ['Blood red', 'Ember', 'Bone', 'Frost'];
 const $ = (id) => document.getElementById(id);
 const send = (msg) => chrome.runtime.sendMessage({ target: 'background', ...msg });
 
 let eqTabs = {};      // tabId -> settings, for tabs being EQ'd
 let profiles = {};
-let accent = 0;
+let theme = { accent: 0, image: null }; // colour, and your background image if any
 let lastSettings = null;
 const strips = new Map(); // tabId -> strip element
 const notes = new Map();  // tabId -> note to show under the strip
@@ -254,38 +253,54 @@ function buildKnob() {
 
 // ---------------------------------------------------------------- theme
 function buildSwatches() {
-  const box = $('swatches');
-  ACCENTS.forEach((c, i) => {
-    const b = document.createElement('button');
-    b.className = 'swatch';
-    b.title = ACCENT_NAMES[i];
-    b.innerHTML = `<span style="background:${c}"></span>`;
-    b.addEventListener('click', () => chrome.storage.local.set({ accent: i }));
-    box.appendChild(b);
-  });
+  buildThemeSwatches($('swatches'), (i) => chrome.storage.local.set({ accent: i }));
 }
 
 function applyTheme() {
-  document.documentElement.style.setProperty('--accent', ACCENTS[accent]);
-  $('title').src = `assets/title${accent}.png`;
-  [...$('swatches').children].forEach((b, i) => b.classList.toggle('on', i === accent));
+  paintTheme(theme, $('title'), $('swatches'));
+  $('forest').hidden = !theme.image;
+  $('image').textContent = theme.image ? 'Other image' : 'Your image';
+}
+
+// Your own background image: its colours become the fifth swatch, picked straight away.
+function buildImageButtons() {
+  const input = $('imageFile');
+  $('image').addEventListener('click', () => input.click());
+  input.addEventListener('change', async () => {
+    const file = input.files && input.files[0];
+    input.value = '';
+    if (!file) return;
+    try {
+      const { dataUrl, colours } = await imageFromFile(file);
+      await chrome.storage.local.set({ bgImage: dataUrl, imageColours: colours, accent: IMAGE_ACCENT });
+    } catch (e) {
+      $('themeNote').textContent = "That file couldn't be used as an image.";
+      setTimeout(() => { $('themeNote').textContent = ''; }, 4000);
+    }
+  });
+  $('forest').addEventListener('click', async () => {
+    await chrome.storage.local.remove(['bgImage', 'imageColours']);
+    if (theme.accent === IMAGE_ACCENT) await chrome.storage.local.set({ accent: 0 });
+  });
 }
 
 // ---------------------------------------------------------------- start
 async function init() {
-  const s = await chrome.storage.local.get(['profiles', 'accent', 'lastSettings', 'master']);
+  const s = await chrome.storage.local.get(['profiles', 'lastSettings', 'master']);
+  theme = await loadTheme();
   masterDb = s.master ?? 0;
   masterMute = !!(await chrome.storage.session.get('masterMute')).masterMute;
   profiles = s.profiles || {};
-  accent = s.accent ?? 0;
   lastSettings = s.lastSettings || null;
   buildSwatches();
+  buildImageButtons();
   buildKnob();
   applyTheme();
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local') {
-      if (changes.accent) { accent = changes.accent.newValue ?? 0; applyTheme(); }
+      if (changes.accent || changes.bgImage || changes.imageColours)
+        loadTheme().then((t) => { theme = t; applyTheme(); });
       if (changes.lastSettings) lastSettings = changes.lastSettings.newValue || null;
       if (changes.profiles) {
         profiles = changes.profiles.newValue || {};
