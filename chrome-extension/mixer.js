@@ -326,6 +326,7 @@ async function init() {
   buildSwatches();
   buildBackgroundMenu();
   buildKnob();
+  $('spectrum').addEventListener('click', () => send({ type: 'openSpectrum' }));
   applyTheme();
 
   chrome.storage.onChanged.addListener((changes, area) => {

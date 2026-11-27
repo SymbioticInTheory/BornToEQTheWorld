@@ -25,6 +25,22 @@ No headphone correction: just tone and volume, per tab.
   (wide) to 8 (narrow). The two end bands are shelves, so they have no Q.
   Tuned values show in your colour, are saved with your profiles, and a
   built-in preset puts them back to normal.
+- Click **Curve** or **Bands** to fold that box away (remembered).
+- **Analyser** (on the curve box, off by default) shows what the tab is
+  playing behind the curve: grey before the EQ, a thin line in your colour
+  after it. It only runs while it's on, the tab is on and the curve is
+  showing; the audio page drops its analysers a second after nothing asks.
+- **Spectrum ↗** (on the curve box, and in the mixer) opens a separate window
+  showing everything playing through BEQ, **before the EQ** (each tab's own
+  sound) or **after** it (Measure setting): a long-term
+  average in your colour plus a live line. Settings (remembered): what to
+  show, average time (1 s to 30 s, or until Reset), block size, overlap,
+  slope (tilt around 1 kHz), smoothing (fractional octave), and the level
+  and frequency range. **Defaults** puts back the mastering setup (6 s
+  average, 8192 block, 88% overlap, 4.5 dB/oct, 2/3 octave, -69 to -12 dB).
+  Hover for the frequency and level; double-click to reset the average.
+  Only tabs that are on in BEQ are included, since those are the ones BEQ
+  plays.
 - Pick a standard preset, or **Save** your own profiles (kept in Chrome).
 - The dots pick the colour, like in the plugin.
 - The background menu (at the bottom of the mixer) picks the Forest, one of

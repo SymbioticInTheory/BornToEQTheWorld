@@ -114,6 +114,18 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         reply({ ok: true });
         return;
       }
+      case 'openSpectrum': {
+        const { spectrumWindow } = await chrome.storage.session.get('spectrumWindow');
+        if (spectrumWindow != null) {
+          try { await chrome.windows.update(spectrumWindow, { focused: true }); reply({ ok: true }); return; } catch (_) {}
+        }
+        const { spectrumSize } = await chrome.storage.local.get('spectrumSize');
+        const w = await chrome.windows.create({ url: 'spectrum.html', type: 'popup',
+          width: (spectrumSize && spectrumSize.width) || 760, height: (spectrumSize && spectrumSize.height) || 460 });
+        await chrome.storage.session.set({ spectrumWindow: w.id });
+        reply({ ok: true });
+        return;
+      }
       case 'ended': // the tab's stream stopped by itself (tab closed, capture ended)
         await stopTab(msg.tabId);
         reply({ ok: true });
@@ -128,4 +140,6 @@ chrome.tabs.onRemoved.addListener((tabId) => { stopTab(tabId); });
 chrome.windows.onRemoved.addListener(async (id) => {
   const { mixerWindow } = await chrome.storage.session.get('mixerWindow');
   if (mixerWindow === id) await chrome.storage.session.remove('mixerWindow');
+  const { spectrumWindow } = await chrome.storage.session.get('spectrumWindow');
+  if (spectrumWindow === id) await chrome.storage.session.remove('spectrumWindow');
 });

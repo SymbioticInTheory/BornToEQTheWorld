@@ -15,12 +15,22 @@
   </header>
   <div class="sub"><span class="label">Tab EQ</span><span id="tabName"></span></div>
 
-  <section class="panel graph">
-    <canvas id="curve" width="816" height="248"></canvas>
+  <section class="panel graph" id="graphBox">
+    <div class="box-head">
+      <button class="fold" data-box="graph" title="Show or hide the curve">Curve</button>
+      <span class="head-right">
+      <button id="spectrum" class="pill tiny" title="Open the spectrum window: everything playing through BEQ, with a long average">Spectrum ↗</button>
+      <button id="analyser" class="pill tiny" title="Show what the tab is playing on the curve: grey before the EQ, your colour after it. Uses a little more CPU while it's on and the curve is showing">Analyser</button>
+      </span>
+    </div>
+    <div class="box-body"><canvas id="curve" width="728" height="200"></canvas></div>
   </section>
 
-  <section class="panel">
-    <div id="bands" class="bands"></div>
+  <section class="panel" id="bandsBox">
+    <div class="box-head">
+      <button class="fold" data-box="bands" title="Show or hide the bands">Bands</button>
+    </div>
+    <div class="box-body"><div id="bands" class="bands"></div></div>
   </section>
 
   <section class="panel level">
