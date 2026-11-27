@@ -360,6 +360,7 @@ async function init() {
     chrome.storage.local.set({ folded });
     render();
   }));
+  $('spectrum').addEventListener('click', () => send({ type: 'openSpectrum' }));
   $('analyser').addEventListener('click', () => {
     analyserOn = !analyserOn;
     chrome.storage.local.set({ analyser: analyserOn });

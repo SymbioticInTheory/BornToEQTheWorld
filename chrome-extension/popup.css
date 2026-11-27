@@ -72,6 +72,8 @@ body.window { width: auto; min-height: 100vh; }
 .collapsed .fold::before { content: "\25B8"; }
 .collapsed .box-head { margin-bottom: 0; }
 .collapsed .box-body, .collapsed #analyser { display: none; }
+.box-head .head-right { display: flex; gap: 4px; }
+.collapsed .head-right { display: none; }
 .pill.tiny { height: 20px; padding: 0 8px; font-size: 10px; letter-spacing: 0.12em; }
 
 .graph { padding: 6px 6px 6px; }

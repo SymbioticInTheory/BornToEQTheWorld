@@ -1,0 +1,20 @@
+/* The spectrum window. Builds on popup.css. */
+body.spectrum { display: flex; flex-direction: column; height: 100vh; min-height: 0; overflow: hidden; }
+.sub .hint { color: var(--soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.readout { margin-left: auto; font: 700 13px "Barlow Condensed", sans-serif; letter-spacing: 0.06em; color: var(--text); white-space: nowrap; }
+.plot { flex: 1; min-height: 120px; position: relative; padding: 6px; }
+#plot { width: 100%; height: 100%; display: block; cursor: crosshair; }
+.idle { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--soft); padding: 20px; text-align: center; }
+.settings {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 6px 12px; align-items: end;
+}
+.settings label {
+  display: flex; flex-direction: column; gap: 3px;
+  font: 700 11px "Barlow Condensed", sans-serif; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted);
+}
+.settings select, .settings input { flex: none; height: 26px; font: 400 12px Barlow, sans-serif; letter-spacing: 0; text-transform: none; }
+.settings input {
+  width: 100%; border-radius: 8px; border: 1px solid rgba(255,255,255,0.16); background: var(--field); color: var(--text); padding: 0 8px;
+}
+.settings label:has(input) { position: relative; }
+.settings .btn { height: 26px; }

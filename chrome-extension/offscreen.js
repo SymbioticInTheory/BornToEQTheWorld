@@ -83,6 +83,29 @@ function dropAnalysers(t) {
   t.analysers = null; t.bins = null;
 }
 
+// The spectrum window: everything BEQ plays (after the master), raw dB per FFT bin.
+// Made when the window first asks and removed a second after it stops asking.
+let masterAnalyser = null, masterBins = null, masterTimer = null;
+function masterSpectrum(fftSize) {
+  if (!ctx || !master) return null;
+  if (!masterAnalyser) {
+    masterAnalyser = ctx.createAnalyser();
+    masterAnalyser.smoothingTimeConstant = 0; // the window does its own averaging
+    master.connect(masterAnalyser);
+  }
+  if (masterAnalyser.fftSize !== fftSize) { masterAnalyser.fftSize = fftSize; masterBins = null; }
+  if (!masterBins) masterBins = new Float32Array(masterAnalyser.frequencyBinCount);
+  clearTimeout(masterTimer);
+  masterTimer = setTimeout(() => {
+    try { master.disconnect(masterAnalyser); } catch (_) {}
+    masterAnalyser = null; masterBins = null;
+  }, 1000);
+  masterAnalyser.getFloatFrequencyData(masterBins);
+  const out = new Array(masterBins.length);
+  for (let i = 0; i < out.length; i++) out[i] = masterBins[i] < -200 ? -200 : Math.round(masterBins[i] * 100) / 100;
+  return { rate: ctx.sampleRate, db: out, playing: tabs.size };
+}
+
 function stop(tabId) {
   const t = tabs.get(tabId);
   if (!t) return;
@@ -111,6 +134,11 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     const t = tabs.get(msg.tabId);
     if (t) applySettings(t.chain, msg.settings, audio());
     reply({ ok: !!t });
+    return false;
+  }
+  if (msg.type === 'masterSpectrum') {
+    const n = [2048, 4096, 8192, 16384, 32768].includes(msg.fftSize) ? msg.fftSize : 8192;
+    reply(masterSpectrum(n));
     return false;
   }
   if (msg.type === 'spectrum') {
