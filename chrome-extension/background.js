@@ -49,8 +49,9 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         return;
       case 'start': {
         await ensureOffscreen();
+        const { master = 0 } = await chrome.storage.local.get('master');
         const r = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'start', tabId: msg.tabId,
-                                                     streamId: msg.streamId, settings: msg.settings });
+                                                     streamId: msg.streamId, settings: msg.settings, master });
         if (!r || !r.ok) { reply({ ok: false, error: (r && r.error) || 'Could not start' }); return; }
         tabs[msg.tabId] = msg.settings;
         await setTabs(tabs);
@@ -67,6 +68,13 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         return;
       case 'stop':
         await stopTab(msg.tabId);
+        reply({ ok: true });
+        return;
+      case 'master': // the mixer's master knob, for every tab that is on
+        await chrome.storage.local.set({ master: msg.db });
+        if (Object.keys(tabs).length) {
+          try { await chrome.runtime.sendMessage({ target: 'offscreen', type: 'master', db: msg.db }); } catch (_) {}
+        }
         reply({ ok: true });
         return;
       case 'openMixer': {

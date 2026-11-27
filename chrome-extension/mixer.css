@@ -28,3 +28,14 @@ body.window { display: flex; flex-direction: column; }
 
 .empty { color: var(--soft); text-align: center; padding: 18px 12px; }
 footer { margin-top: 4px; }
+
+/* Master knob, like the plugin's preamp knob. */
+body.window header { height: 52px; }
+.master { display: flex; align-items: center; gap: 8px; }
+.master .value { width: 54px; text-align: right; }
+#knob { cursor: ns-resize; outline: none; }
+.knob-body { fill: #141517; stroke: rgba(255, 255, 255, 0.16); stroke-width: 1; }
+.knob-track { fill: none; stroke: rgba(255, 255, 255, 0.10); stroke-width: 3.5; stroke-linecap: round; }
+.knob-arc { fill: none; stroke: var(--accent); stroke-width: 3.5; stroke-linecap: round; }
+.knob-pointer { stroke: var(--bright); stroke-width: 3; stroke-linecap: round; }
+#knob:focus-visible .knob-body { stroke: var(--soft); }
