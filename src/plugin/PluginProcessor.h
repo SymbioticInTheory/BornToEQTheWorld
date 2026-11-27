@@ -9,6 +9,7 @@
 #include "dsp/GraphicEq.h"
 #include "dsp/HeadphoneLibrary.h"
 #include "ApoBridge.h"
+#include "Spectrum.h"
 
 #include <array>
 #include <atomic>
@@ -169,6 +170,16 @@ public:
     bool editingMyEq = false;  // UI: graph and cards show My EQ
     bool sidebarCollapsed = false, headphoneCollapsed = false, targetCollapsed = false; // UI, saved with the session
     bool advancedView = false; // UI: target and result curves, saved with the session
+    bool analyserOn = false;   // UI: spectrum behind the curve, saved with the session
+    // The analyser's input: the audio thread copies samples only while a view is registered.
+    bteq::spectrum::Tap spectrumTap;
+    double currentSampleRate() const { return sampleRate; }
+    // Analyser settings, shared by every BEQ (settings.xml "analyser").
+    // Message thread only; analyserVersion() changes whenever they do, so open views can follow.
+    static const bteq::spectrum::Settings& analyserSettings();
+    static void setAnalyserSettings(const bteq::spectrum::Settings&, bool writeFile = true);
+    static int analyserVersion();
+    static juce::File settingsFile();
     int hiddenCurves = 0;      // UI: bit mask of curves switched off in the advanced legend
     float uiScale = 0.0f;      // UI: window scale, 0 = use the last scale picked in any instance
     juce::AudioProcessorValueTreeState params;

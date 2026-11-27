@@ -20,6 +20,8 @@ if(BTEQ_BUILD_TESTS)
   add_test(NAME apo_config COMMAND test_apo_config)
   add_executable(test_image_theme tests/test_image_theme.cpp)
   add_test(NAME image_theme COMMAND test_image_theme)
+  add_executable(test_spectrum tests/test_spectrum.cpp)
+  add_test(NAME spectrum COMMAND test_spectrum)
   add_test(NAME headphone_library
            COMMAND test_library ${CMAKE_SOURCE_DIR}/data/headphones.tsv ${CMAKE_SOURCE_DIR}/presets/sample)
   if(Python3_FOUND)
@@ -102,6 +104,7 @@ if(BTEQ_BUILD_PLUGIN)
   target_sources(BornToEQTheWorld PRIVATE
     src/plugin/PluginProcessor.cpp
     src/plugin/PluginEditor.cpp
+    src/plugin/AnalyserWindow.cpp
     src/plugin/ApoBridge.cpp
     src/plugin/StandaloneAudio.cpp)
   target_include_directories(BornToEQTheWorld PRIVATE src)

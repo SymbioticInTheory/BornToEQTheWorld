@@ -78,9 +78,12 @@ private:
 
 // The response curve. In parametric mode the numbered points can be dragged
 // (frequency and gain), and scrolling over a point changes its Q.
-class ResponseGraph : public juce::Component {
+class ResponseGraph : public juce::Component, private juce::Timer {
 public:
     ResponseGraph(BteqProcessor& p, const Theme& t);
+    ~ResponseGraph() override;
+    void setAnalyser(bool on); // the spectrum behind the curve
+    std::function<void()> onPopOut; // open the analyser window
     void paint(juce::Graphics&) override;
     void resized() override;
     void setAdvanced(bool on);
@@ -111,6 +114,10 @@ private:
     BteqProcessor& proc;
     const Theme& theme;
     juce::TextButton advancedButton { "Advanced" }, myEqButton { "My EQ" }, scopeButton;
+    juce::TextButton analyserButton { "Analyser" }, popOutButton { juce::String::fromUTF8("Pop out \xe2\x86\x97") };
+    void timerCallback() override;
+    std::unique_ptr<bteq::spectrum::Analyser> overlay; // only while the analyser is on
+    int overlayVersion = -1;
     std::unique_ptr<juce::SharedResourcePointer<CurvesHolder>> curves; // loaded on first use
     enum Curve { Target, Measured, Corrected, Eq, numCurves };
     std::array<juce::Rectangle<float>, numCurves> legendHit;
@@ -308,6 +315,8 @@ private:
     juce::String loadedSavedSelection; // headphone + profile it was loaded for
     std::unique_ptr<juce::AlertWindow> nameWindow;
 
+    std::unique_ptr<juce::DocumentWindow> analyserWindow; // the pop-out spectrum
+    void openAnalyserWindow();
     juce::String shownHeadphone, shownMatch;
     juce::Component::SafePointer<juce::CallOutBox> matchBox;
     int shownProfile = -1;
