@@ -395,9 +395,17 @@ void ResponseGraph::setAdvanced(bool on) {
     repaint();
 }
 
+void ResponseGraph::placeAnalyserButtons(juce::Component& parent, juce::Rectangle<int> area) {
+    if (analyserButton.getParentComponent() != &parent) {
+        parent.addAndMakeVisible(analyserButton);
+        parent.addAndMakeVisible(popOutButton);
+    }
+    popOutButton.setBounds(area.removeFromRight(30));
+    area.removeFromRight(4);
+    analyserButton.setBounds(area.removeFromRight(84));
+}
+
 void ResponseGraph::resized() {
-    analyserButton.setBounds(34, 2, 80, 24);
-    popOutButton.setBounds(analyserButton.getRight() + 4, 2, 30, 24);
     advancedButton.setBounds(getWidth() - 96, 2, 96, 24);
     myEqButton.setBounds(getWidth() - 96 - 8 - 76, 2, 76, 24);
     scopeButton.setBounds(myEqButton.getX() - 8 - 140, 2, 140, 24);
@@ -658,7 +666,7 @@ void ResponseGraph::paintAdvanced(juce::Graphics& g, const bteq::HeadphoneProfil
                            { Measured, "Measured", measuredColour, hasMeasured },
                            { Corrected, "Corrected", curveColour, hasMeasured },
                            { Eq, "EQ", eqColour, true } };
-    float x = (float)popOutButton.getRight() + 14.0f; // after the analyser's buttons
+    float x = plotArea().getX();
     const float rightLimit = (float)(scopeButton.isVisible() ? scopeButton.getX() : myEqButton.getX()) - 8.0f;
     g.setFont(theme.bodyFont(14.0f, true));
     for (const auto& it : items) {
@@ -1575,11 +1583,11 @@ void BteqEditor::paintContent(juce::Graphics& g) {
         if (proc.myEqActive()) note << ", plus My EQ";
     }
     if (rSummary.isEmpty()) {
-        g.drawText(note, rTabs.getRight() + 14, rTabs.getY(), rGraph.getRight() - rTabs.getRight() - 14,
-                   rTabs.getHeight(), juce::Justification::centredRight);
+        g.drawText(note, rTabs.getRight() + 14, rTabs.getY(), rGraph.getRight() - 12 - rTabs.getRight() - 14, 22,
+                   juce::Justification::centredRight, true); // the analyser buttons go under it
     } else {
         // Left side hidden: what is selected, then the note.
-        auto r = rSummary.withTrimmedLeft(74).withTrimmedRight(14).reduced(0, 5);
+        auto r = rSummary.withTrimmedLeft(74).withTrimmedRight(14 + 130).reduced(0, 5); // the analyser buttons on the right
         g.setColour(Theme::text);
         g.setFont(theme->bodyFont(14.0f, true));
         g.drawText(headphoneSummary() + "  /  " + targetSummary(), r.removeFromTop(19), juce::Justification::centredLeft, true);
@@ -1662,6 +1670,9 @@ void BteqEditor::layoutContent() {
     parametricTab.setBounds(rTabs.getX() + 4, rTabs.getY() + 4, 132, 40);
     graphicTab.setBounds(rTabs.getX() + 140, rTabs.getY() + 4, 132, 40);
     graph.setBounds(rGraph.reduced(12, 8));
+    // Analyser buttons: under the status text, or right of the summary when the left side is hidden.
+    graph.placeAnalyserButtons(content, rSummary.isEmpty() ? juce::Rectangle<int>(rTabs.getRight() + 14, rTabs.getY() + 24, rGraph.getRight() - 12 - rTabs.getRight() - 14, 24)
+                                                           : juce::Rectangle<int>(rSummary.getX(), rSummary.getCentreY() - 12, rSummary.getWidth() - 14, 24));
     filters.setBounds(rFilters.reduced(12));
     correction.setBounds(rCorrection.getX() + 12, rCorrection.getY() + 58, rCorrection.getWidth() - 24, 26);
     preampValue.setBounds(808, 20, 100, 32);

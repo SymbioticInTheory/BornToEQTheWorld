@@ -84,6 +84,9 @@ public:
     ~ResponseGraph() override;
     void setAnalyser(bool on); // the spectrum behind the curve
     std::function<void()> onPopOut; // open the analyser window
+    // The Analyser and pop-out buttons live in the editor, under the status text
+    // above the graph (so they never meet the legend): `area` is in `parent`'s coordinates.
+    void placeAnalyserButtons(juce::Component& parent, juce::Rectangle<int> area);
     void paint(juce::Graphics&) override;
     void resized() override;
     void setAdvanced(bool on);
