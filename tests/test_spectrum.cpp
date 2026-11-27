@@ -112,8 +112,19 @@ int main() {
         a.settings.smooth = 0;
         for (int i = 0; i < 20; ++i) { feed(tap, rate, 0.05, 1000, 1.0); a.process(tap, rate); }
         const double plain = at(a, 1000);
-        a.adjust = [](const std::vector<double>&, std::vector<double>& db) { for (auto& d : db) d -= 6; };
-        check(std::abs(at(a, 1000) - plain + 6) < 0.01, "adjust hook changes the curve");
+        a.binOffsetDb = [](const std::vector<double>& f) { return std::vector<double>(f.size(), -6.0); };
+        check(std::abs(at(a, 1000) - plain + 6) < 0.01, "per-bin offset changes the curve");
+        // A narrow notch taken out per bin, then smoothed, leaves no trace.
+        a.settings.smooth = 2.0 / 3.0;
+        a.binOffsetDb = nullptr;
+        const double smoothPlain = at(a, 1000);
+        a.binOffsetDb = [](const std::vector<double>& f) {
+            std::vector<double> d(f.size());
+            for (size_t i = 0; i < f.size(); ++i) d[i] = std::abs(std::log2(std::max(f[i], 1.0) / 1000.0)) < 0.05 ? 20.0 : 0.0;
+            return d;
+        };
+        std::printf("1 kHz tone, +20 dB per-bin boost right on it: %+.1f dB after 2/3 oct smoothing\n", at(a, 1000) - smoothPlain);
+        check(at(a, 1000) - smoothPlain > 15, "per-bin offsets apply before smoothing");
     }
     if (failures == 0) std::printf("spectrum: all checks passed\n");
     return failures == 0 ? 0 : 1;

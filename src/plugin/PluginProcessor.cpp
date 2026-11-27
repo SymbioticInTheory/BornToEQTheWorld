@@ -719,15 +719,15 @@ void BteqProcessor::updateAnalyserSource() {
     else if (!listen && loopback.running()) loopback.stop();
 }
 
-std::vector<double> BteqProcessor::appliedResponseDb(const std::vector<double>& freqs) const {
+std::vector<double> BteqProcessor::appliedResponseDb(const std::vector<double>& freqs, bool correction, bool myEq) const {
     std::vector<double> out(freqs.size(), 0.0);
     const juce::ScopedLock sl(buildLock);
     if (bypassParam->load() > 0.5f) return out;
     const double k = juce::jlimit(0.0, 1.0, (double)amountParam->load() / 100.0);
-    double preamp = trimParam->load();
+    double preamp = correction ? (double)trimParam->load() : 0.0;
     std::vector<bteq::BiquadCoeffs> coeffs;
     constexpr double fs = 48000.0;
-    if (const auto* p = selectedProfile()) {
+    if (const auto* p = correction ? selectedProfile() : nullptr) {
         if (graphicModeActive()) {
             const double pre = preampSettingDb();
             auto gains = graphicShapeDb();
@@ -742,7 +742,7 @@ std::vector<double> BteqProcessor::appliedResponseDb(const std::vector<double>& 
                 if (f.enabled) coeffs.push_back(bteq::BiquadCoeffs::make(f.type, f.fc, f.gainDb * k, f.q, fs));
         }
     }
-    if (myEqSettings.on) {
+    if (myEq && myEqSettings.on) {
         bool any = false;
         for (const auto& b : myEqSettings.bands)
             if (b.enabled && std::abs(b.gainDb) > 0.01) {
