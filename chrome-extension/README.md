@@ -47,6 +47,8 @@ tab playing sound:
   down (Shift for fine steps), scroll on it, or double-click for 0 dB.
 - **Mute** next to it silences every tab playing sound. Pressing it again
   unmutes only the tabs it muted, not ones you muted yourself.
+- The size menu (top right, 80% to 175%) scales the whole mixer, and its
+  window grows or shrinks to match. The mixer opens at that size next time.
 
 The mixer needs Chrome's "tabs" permission to show tab titles and icons, so
 Chrome lists the extension as able to read your browsing history. Nothing

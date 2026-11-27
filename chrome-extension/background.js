@@ -107,7 +107,9 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         if (mixerWindow != null) {
           try { await chrome.windows.update(mixerWindow, { focused: true }); reply({ ok: true }); return; } catch (_) {}
         }
-        const w = await chrome.windows.create({ url: 'mixer.html', type: 'popup', width: 500, height: 720 });
+        const { mixerScale = 1 } = await chrome.storage.local.get('mixerScale');
+        const w = await chrome.windows.create({ url: 'mixer.html', type: 'popup',
+          width: Math.round(500 * mixerScale), height: Math.round(720 * mixerScale) });
         await chrome.storage.session.set({ mixerWindow: w.id });
         reply({ ok: true });
         return;

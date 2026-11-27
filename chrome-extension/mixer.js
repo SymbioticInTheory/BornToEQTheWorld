@@ -294,9 +294,30 @@ function buildBackgroundMenu() {
   });
 }
 
+// ---------------------------------------------------------------- size
+// Scales everything in the mixer, and the window with it (stored as "mixerScale").
+const SCALES = [0.8, 0.9, 1, 1.15, 1.3, 1.5, 1.75];
+function buildSizeMenu(initial) {
+  const sel = $('size');
+  let scale = SCALES.includes(initial) ? initial : 1;
+  const show = () => { sel.value = String(scale); document.documentElement.style.setProperty('--zoom', scale); };
+  show();
+  sel.addEventListener('change', async () => {
+    const next = Number(sel.value), ratio = next / scale;
+    scale = next;
+    show();
+    chrome.storage.local.set({ mixerScale: scale });
+    try {
+      const w = await chrome.windows.getCurrent();
+      await chrome.windows.update(w.id, { width: Math.round(w.width * ratio), height: Math.round(w.height * ratio) });
+    } catch (_) {}
+  });
+}
+
 // ---------------------------------------------------------------- start
 async function init() {
-  const s = await chrome.storage.local.get(['profiles', 'lastSettings', 'master']);
+  const s = await chrome.storage.local.get(['profiles', 'lastSettings', 'master', 'mixerScale']);
+  buildSizeMenu(s.mixerScale ?? 1);
   theme = await loadTheme();
   masterDb = s.master ?? 0;
   masterMute = !!(await chrome.storage.session.get('masterMute')).masterMute;
