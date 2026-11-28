@@ -1850,8 +1850,19 @@ void BteqEditor::showScaleMenu(bool withSizes) {
     static const char* builtIn[] = { "Sunset", "Ocean", "Neon", "Moss", "Concrete" };
     juce::String current;
     if (auto xml = juce::XmlDocument::parse(settingsFile())) current = xml->getStringAttribute("background");
-    static constexpr int kLowMemory = 1020;
+    static constexpr int kLowMemory = 1020, kRoomOff = 1021, kRoomFirst = 1100;
+    auto rooms = proc.roomScenes();
+    if (rooms.isEmpty()) rooms.add("Mix Room A");
     if (withSizes) {
+        juce::PopupMenu roomMenu;
+        const auto active = proc.activeRoom();
+        roomMenu.addItem(kRoomOff, "Off", true, active.isEmpty());
+        if (proc.roomPausedForApo())
+            roomMenu.addItem(0, "Turn off Equalizer APO to use room processing", false);
+        for (int i = 0; i < rooms.size(); ++i)
+            roomMenu.addItem(kRoomFirst + i, rooms[i], !proc.roomPausedForApo(), rooms[i] == active);
+        menu.addSubMenu("dearVR room", roomMenu);
+
         menu.addSectionHeader("Memory");
         menu.addItem(kLowMemory, "Low memory mode (no background picture; headphone list freed while closed)", true, Theme::lowMemory);
         menu.addSectionHeader("Background");
@@ -1864,8 +1875,15 @@ void BteqEditor::showScaleMenu(bool withSizes) {
     juce::Component::SafePointer<BteqEditor> safe(this);
     auto options = juce::PopupMenu::Options();
     if (!withSizes) options = options.withTargetComponent(&backgroundButton);
-    menu.showMenuAsync(options, [safe](int id) {
+    menu.showMenuAsync(options, [safe, rooms](int id) {
         if (safe == nullptr || id <= 0) return;
+        if (id == kRoomOff || (id >= kRoomFirst && id < kRoomFirst + rooms.size())) {
+            const auto error = safe->proc.selectRoom(id == kRoomOff ? juce::String() : rooms[id - kRoomFirst]);
+            if (error.isNotEmpty())
+                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "dearVR room",
+                                                       error, "OK", safe.getComponent());
+            return;
+        }
         if (id == kImage) { safe->chooseBackground(); return; }
         if (id == kForest) { safe->useForest(); return; }
         if (id == kLowMemory) { safe->setLowMemory(!Theme::lowMemory); return; }

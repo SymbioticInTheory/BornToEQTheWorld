@@ -693,7 +693,33 @@ bool BteqProcessor::myEqActive() const {
 // ---------------------------------------------------------------------------
 // Engine building (message thread, or prepareToPlay)
 // ---------------------------------------------------------------------------
+juce::String BteqProcessor::selectRoom(const juce::String& scene) {
+    const auto error = room.select(scene);
+    if (error.isEmpty()) {
+        const juce::ScopedLock lock(roomSelectionLock);
+        pendingRoomSelection.reset();
+        roomSelection = scene;
+    }
+    return error;
+}
+
+juce::String BteqProcessor::activeRoom() const {
+    const juce::ScopedLock lock(roomSelectionLock);
+    return roomSelection;
+}
+
 void BteqProcessor::timerCallback() {
+    std::optional<juce::String> restoreRoom;
+    {
+        const juce::ScopedLock lock(roomSelectionLock);
+        restoreRoom.swap(pendingRoomSelection);
+    }
+    if (restoreRoom) {
+        // A missing installation leaves the local EQ available and retains the scene for the session.
+        const auto error = room.select(*restoreRoom);
+        if (error.isNotEmpty()) room.select({});
+    }
+    if (room.loaded()) room.updateTiming();
     rebuild(false);
     freeAllRetired();
     // Your presets are written to disk once a drag has settled, not on every step.
@@ -972,6 +998,7 @@ void BteqProcessor::prepareToPlay(double sr, int samplesPerBlock) {
     trimGain.reset(sr, 0.02);
     trimGain.setCurrentAndTargetValue(juce::Decibels::decibelsToGain(trimParam->load()));
     rebuild(true);
+    room.prepare(sr, samplesPerBlock, getTotalNumInputChannels() == 2 && getTotalNumOutputChannels() == 2);
     // Take the freshly built engines immediately (audio is stopped here).
     const juce::SpinLock::ScopedLockType lock(swapLock);
     auto install = [](auto& slot) {
@@ -1065,6 +1092,7 @@ void BteqProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     // The analyser, when one is showing: the input before any correction (or the output, below).
     const bool tapping = spectrumTap.wanted() && !spectrumTap.external.load(); // the loopback feeds it instead
     if (tapping && spectrumTap.where.load() == 0) spectrumTap.write(buffer.getArrayOfReadPointers(), chans, n);
+    if (!apoRunning.load()) room.process(buffer);
     bool usedGraphic = false, usedEq = false, usedExtra = false;
     if (!bypass) {
         if (graphicReady.load() && graphicSlot.active != nullptr) {
@@ -1109,6 +1137,7 @@ void BteqProcessor::getStateInformation(juce::MemoryBlock& destData) {
     state.setProperty("headphoneCollapsed", headphoneCollapsed, nullptr);
     state.setProperty("targetCollapsed", targetCollapsed, nullptr);
     if (standaloneUi) state.setProperty("apoOutput", apoWanted, nullptr);
+    state.setProperty("dearVrRoom", activeRoom(), nullptr);
     {
         const juce::ScopedLock sl(buildLock);
         writeMyEq(state, myEqSettings);
@@ -1169,6 +1198,11 @@ void BteqProcessor::setStateInformation(const void* data, int sizeInBytes) {
     targetCollapsed = (bool)state.getProperty("targetCollapsed", false);
     readMyEq(state);
     if (standaloneUi) apoWanted = (bool)state.getProperty("apoOutput", false); // started by the timer
+    {
+        const juce::ScopedLock lock(roomSelectionLock);
+        roomSelection = state.getProperty("dearVrRoom").toString();
+        pendingRoomSelection = roomSelection;
+    }
     profileIndex = indexForKey(headphoneName, state.getProperty("profile").toString());
     {
         const juce::ScopedLock sl(buildLock);
