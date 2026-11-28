@@ -39,6 +39,19 @@ to `settings.xml` (in
 haze over the image, and advanced-view curve colours that stay clear of the
 accent. **Forest** is the original.
 
+## dearVR room monitoring
+
+Install dearVR MIX in a standard VST3 folder. In the plugin or standalone,
+right-click a blank part of the interface and choose **dearVR room → Mix Room A**.
+After dearVR loads, the menu lists its available scenes. Choose **Off** to
+unload it. The scene is saved with the session.
+
+BEQ runs the selected room on stereo input, then applies its own headphone
+correction. The hosted dearVR instance uses its default speaker, ambience,
+focus and head rotation settings with its headphone compensation switched off.
+The standalone needs stereo audio input with Equalizer APO mode off to use
+the room. Its Equalizer APO mode continues to apply BEQ's EQ system-wide.
+
 ## Build and test
 
 ```

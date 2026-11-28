@@ -106,6 +106,7 @@ if(BTEQ_BUILD_PLUGIN)
     src/plugin/PluginEditor.cpp
     src/plugin/AnalyserWindow.cpp
     src/plugin/ApoBridge.cpp
+    src/plugin/DearVrRoom.cpp
     src/plugin/StandaloneAudio.cpp
     src/plugin/Loopback.cpp)
   target_include_directories(BornToEQTheWorld PRIVATE src)
@@ -114,6 +115,7 @@ if(BTEQ_BUILD_PLUGIN)
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
+    JUCE_PLUGINHOST_VST3=1
     JUCE_DISPLAY_SPLASH_SCREEN=0
     JUCE_ASIO=1)  # standalone only; JUCE ships the ASIO SDK (GPLv3)
 

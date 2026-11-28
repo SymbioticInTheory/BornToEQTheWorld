@@ -9,6 +9,7 @@
 #include "dsp/GraphicEq.h"
 #include "dsp/HeadphoneLibrary.h"
 #include "ApoBridge.h"
+#include "DearVrRoom.h"
 #include "Spectrum.h"
 #include "Loopback.h"
 
@@ -53,7 +54,7 @@ public:
 
     // AudioProcessor
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
-    void releaseResources() override {}
+    void releaseResources() override { room.release(); }
     bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
     using AudioProcessor::processBlock;
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
@@ -63,7 +64,7 @@ public:
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.4; }
+    double getTailLengthSeconds() const override { return 0.4 + room.tailSeconds(); }
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
     void setCurrentProgram(int) override {}
@@ -167,6 +168,11 @@ public:
     juce::String apoFolder() const { return apo.folder().getFullPathName(); }
     juce::String apoConfigText() const; // what BEQ's file in APO's config folder says now
 
+    juce::String selectRoom(const juce::String& scene);
+    juce::String activeRoom() const;
+    juce::StringArray roomScenes() const { return room.scenes(); }
+    bool roomPausedForApo() const { return apoRunning.load(); }
+
     int accentIndex = 0; // UI colour choice, saved with the session
     bool editingMyEq = false;  // UI: graph and cards show My EQ
     bool sidebarCollapsed = false, headphoneCollapsed = false, targetCollapsed = false; // UI, saved with the session
@@ -210,6 +216,10 @@ private:
     void syncMyEq(); // per-target mode: swap in the My EQ of the selected target
     void updateApo();
     void updateAnalyserSource();
+    DearVrRoom room { *this };
+    mutable juce::CriticalSection roomSelectionLock;
+    juce::String roomSelection;
+    std::optional<juce::String> pendingRoomSelection; // session restore hands loading to the message thread
     ApoBridge apo;
     bool apoWanted = false;
     std::atomic<bool> apoRunning { false }; // the standalone's own audio passes through untouched
