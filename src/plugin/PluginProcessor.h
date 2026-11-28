@@ -94,6 +94,8 @@ public:
     bool selectedIsCustom() const;
     // Your own presets for the selected headphone. Editing one changes the preset itself.
     juce::String addCustomPreset(const juce::String& name, const bteq::ParametricPreset& preset); // selects it; returns the name used
+    // A Wavelet / GraphicEQ curve as your own preset (played by the graphic EQ). Selects it; returns the name used.
+    juce::String addCustomGraphicPreset(const juce::String& name, const std::vector<double>& freqs, const std::vector<double>& gainsDb);
     void renameCustomPreset(int profileIndex, const juce::String& name);
     void deleteCustomPreset(int profileIndex);
     bool graphicAvailable() const;

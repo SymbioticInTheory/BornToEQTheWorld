@@ -98,11 +98,40 @@ bteq::HeadphoneProfile makeCustom(const std::string& headphone, const std::strin
     p.parametric = preset;
     return p;
 }
+
+// A preset that is a Wavelet-style curve (tenths of a dB at the library's
+// GraphicEQ frequencies) rather than filters. It plays through the graphic EQ.
+bteq::HeadphoneProfile makeCustomGraphic(const std::string& headphone, const std::string& name, std::vector<int16_t> tenths) {
+    bteq::HeadphoneProfile p;
+    p.name = headphone;
+    p.source = CustomPresetStore::kSource;
+    p.originalPreset = true;
+    p.target = name;
+    p.graphicTenths = std::move(tenths);
+    return p;
+}
+
+juce::String tenthsToString(const std::vector<int16_t>& t) {
+    juce::StringArray parts;
+    for (auto v : t) parts.add(juce::String((int)v));
+    return parts.joinIntoString(",");
+}
+
+std::vector<int16_t> tenthsFromString(const juce::String& s) {
+    std::vector<int16_t> out;
+    for (const auto& v : juce::StringArray::fromTokens(s, ",", "")) out.push_back((int16_t)v.getIntValue());
+    return out;
+}
 } // namespace
 
 CustomPresetStore::CustomPresetStore() {
     if (auto xml = juce::XmlDocument::parse(file()))
         for (auto* e : xml->getChildWithTagNameIterator("PRESET")) {
+            if (e->hasAttribute("graphic")) {
+                presets.push_back(makeCustomGraphic(e->getStringAttribute("headphone").toStdString(), e->getStringAttribute("name").toStdString(),
+                                                    tenthsFromString(e->getStringAttribute("graphic"))));
+                continue;
+            }
             bteq::ParametricPreset preset;
             preset.preampDb = e->getDoubleAttribute("preamp");
             preset.filters = filtersFromString(e->getStringAttribute("filters"));
@@ -123,6 +152,10 @@ void CustomPresetStore::save() const {
         auto* e = xml.createNewChildElement("PRESET");
         e->setAttribute("headphone", juce::String(p.name));
         e->setAttribute("name", juce::String(p.target));
+        if (!p.hasParametric) {
+            e->setAttribute("graphic", tenthsToString(p.graphicTenths));
+            continue;
+        }
         e->setAttribute("preamp", p.parametric.preampDb);
         e->setAttribute("filters", filtersToString(p.parametric.filters));
     }
@@ -227,7 +260,8 @@ bool BteqProcessor::selectedIsCustom() const { return isCustom(selectedProfile()
 
 bteq::HeadphoneProfile* BteqProcessor::selectedCustom() {
     const auto* p = selectedProfile();
-    return isCustom(p) && !match.active ? const_cast<bteq::HeadphoneProfile*>(p) : nullptr;
+    // A graphic preset isn't edited in place: its preamp is an ordinary edit, as for the library's curves.
+    return isCustom(p) && p->hasParametric && !match.active ? const_cast<bteq::HeadphoneProfile*>(p) : nullptr;
 }
 
 juce::String BteqProcessor::uniqueCustomName(const juce::String& wanted, const bteq::HeadphoneProfile* except) const {
@@ -247,6 +281,25 @@ juce::String BteqProcessor::addCustomPreset(const juce::String& wanted, const bt
     if (headphoneName.isEmpty()) return {};
     const auto name = uniqueCustomName(wanted, nullptr);
     customs->presets.push_back(makeCustom(headphoneName.toStdString(), name.toStdString(), preset));
+    customs->save();
+    const auto profs = profilesFor(headphoneName);
+    profileIndex = (int)profs.size() - 1;
+    matchName.clear();
+    computeMatch();
+    rebuild(false);
+    return name;
+}
+
+juce::String BteqProcessor::addCustomGraphicPreset(const juce::String& wanted, const std::vector<double>& freqs, const std::vector<double>& gainsDb) {
+    const juce::ScopedLock sl(buildLock);
+    if (headphoneName.isEmpty() || freqs.empty()) return {};
+    const auto& at = graphicFrequencies();
+    if (at.empty()) return {};
+    // On the library's frequencies (an AutoEQ / Wavelet file already uses them, so it is unchanged).
+    std::vector<int16_t> tenths;
+    for (double f : at) tenths.push_back((int16_t)juce::jlimit(-32000, 32000, juce::roundToInt(bteq::graphicGainAt(freqs, gainsDb, f) * 10.0)));
+    const auto name = uniqueCustomName(wanted, nullptr);
+    customs->presets.push_back(makeCustomGraphic(headphoneName.toStdString(), name.toStdString(), std::move(tenths)));
     customs->save();
     const auto profs = profilesFor(headphoneName);
     profileIndex = (int)profs.size() - 1;
@@ -293,6 +346,11 @@ void BteqProcessor::writeCustom(juce::ValueTree& t) const {
     juce::ValueTree c("CUSTOM");
     c.setProperty("headphone", juce::String(p->name), nullptr);
     c.setProperty("name", juce::String(p->target), nullptr);
+    if (!p->hasParametric) {
+        c.setProperty("graphic", tenthsToString(p->graphicTenths), nullptr);
+        t.appendChild(c, nullptr);
+        return;
+    }
     c.setProperty("preamp", p->parametric.preampDb, nullptr);
     c.setProperty("filters", filtersToString(p->parametric.filters), nullptr);
     t.appendChild(c, nullptr);
@@ -304,6 +362,11 @@ void BteqProcessor::readCustom(const juce::ValueTree& t) {
     const auto headphone = c.getProperty("headphone").toString().toStdString();
     const auto name = c.getProperty("name").toString().toStdString();
     if (headphone.empty() || name.empty() || customs->find(headphone, name) != nullptr) return;
+    if (c.hasProperty("graphic")) {
+        customs->presets.push_back(makeCustomGraphic(headphone, name, tenthsFromString(c.getProperty("graphic").toString())));
+        customs->save();
+        return;
+    }
     bteq::ParametricPreset preset;
     preset.preampDb = (double)c.getProperty("preamp", 0.0);
     preset.filters = filtersFromString(c.getProperty("filters").toString());
