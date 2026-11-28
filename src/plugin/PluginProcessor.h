@@ -171,7 +171,6 @@ public:
     juce::String selectRoom(const juce::String& scene);
     juce::String activeRoom() const;
     juce::StringArray roomScenes() const { return room.scenes(); }
-    bool roomPausedForApo() const { return apoRunning.load(); }
 
     int accentIndex = 0; // UI colour choice, saved with the session
     bool editingMyEq = false;  // UI: graph and cards show My EQ
@@ -224,6 +223,10 @@ private:
     bool apoWanted = false;
     std::atomic<bool> apoRunning { false }; // the standalone's own audio passes through untouched
     juce::String apoProblem, apoLastText;
+    juce::String apoRoomWritten;   // the room whose responses are in APO's folder
+    juce::String apoRoomTried;     // the room last written (or tried), so a failure isn't retried every tick
+    juce::String roomRecaptureFor; // a room already re-recorded (or tried) at the new sample rate
+    bool writeApoRoom(const juce::String& scene, juce::String& error);
     juce::uint32 apoLastWrite = 0;
     juce::uint32 apoDeviceCheckUntil = 0;
     bool myEqPerTargetFlag = false;

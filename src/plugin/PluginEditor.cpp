@@ -1870,8 +1870,7 @@ void BteqEditor::showRoomMenu() {
     const auto active = proc.activeRoom();
     menu.addSectionHeader("dearVR room");
     menu.addItem(kOff, "Off", true, active.isEmpty());
-    if (proc.roomPausedForApo()) menu.addItem(0, "Turn off Equalizer APO to use room processing", false);
-    for (int i = 0; i < rooms.size(); ++i) menu.addItem(kFirst + i, rooms[i], !proc.roomPausedForApo(), rooms[i] == active);
+    for (int i = 0; i < rooms.size(); ++i) menu.addItem(kFirst + i, rooms[i], true, rooms[i] == active);
     menu.addSeparator();
     menu.addItem(kList, "Copy dearVR settings list");
     juce::Component::SafePointer<BteqEditor> safe(this);
@@ -1879,7 +1878,9 @@ void BteqEditor::showRoomMenu() {
         if (safe == nullptr || id <= 0) return;
         if (id == kList) { safe->copyDearVrSettings(); return; }
         if (id != kOff && (id < kFirst || id >= kFirst + rooms.size())) return;
+        juce::MouseCursor::showWaitCursor(); // recording a room takes a moment the first time
         const auto error = safe->proc.selectRoom(id == kOff ? juce::String() : rooms[id - kFirst]);
+        juce::MouseCursor::hideWaitCursor();
         safe->refreshRoomButton();
         if (error.isNotEmpty())
             juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "dearVR room", error, "OK", safe.getComponent());
@@ -1922,10 +1923,8 @@ void BteqEditor::showScaleMenu(bool withSizes, juce::Component* target) {
         juce::PopupMenu roomMenu;
         const auto active = proc.activeRoom();
         roomMenu.addItem(kRoomOff, "Off", true, active.isEmpty());
-        if (proc.roomPausedForApo())
-            roomMenu.addItem(0, "Turn off Equalizer APO to use room processing", false);
         for (int i = 0; i < rooms.size(); ++i)
-            roomMenu.addItem(kRoomFirst + i, rooms[i], !proc.roomPausedForApo(), rooms[i] == active);
+            roomMenu.addItem(kRoomFirst + i, rooms[i], true, rooms[i] == active);
         menu.addSubMenu("dearVR room", roomMenu);
 
         menu.addSectionHeader("Memory");
@@ -1944,7 +1943,9 @@ void BteqEditor::showScaleMenu(bool withSizes, juce::Component* target) {
     menu.showMenuAsync(options, [safe, rooms](int id) {
         if (safe == nullptr || id <= 0) return;
         if (id == kRoomOff || (id >= kRoomFirst && id < kRoomFirst + rooms.size())) {
+            juce::MouseCursor::showWaitCursor(); // recording a room takes a moment the first time
             const auto error = safe->proc.selectRoom(id == kRoomOff ? juce::String() : rooms[id - kRoomFirst]);
+            juce::MouseCursor::hideWaitCursor();
             safe->refreshRoomButton();
             if (error.isNotEmpty())
                 juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "dearVR room",

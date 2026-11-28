@@ -719,7 +719,16 @@ void BteqProcessor::timerCallback() {
         const auto error = room.select(*restoreRoom);
         if (error.isNotEmpty()) room.select({});
     }
-    if (room.loaded()) room.updateTiming();
+    if (room.needsRecapture()) {
+        // The sample rate changed: record the room again at the new rate, once.
+        const auto scene = activeRoom();
+        if (scene.isNotEmpty() && roomRecaptureFor != scene) {
+            roomRecaptureFor = scene;
+            room.select(scene); // on failure the old recording keeps playing, resampled
+        }
+    } else {
+        roomRecaptureFor.clear();
+    }
     rebuild(false);
     freeAllRetired();
     // Your presets are written to disk once a drag has settled, not on every step.
@@ -819,6 +828,18 @@ void BteqProcessor::updateApo() {
     if ((juce::int32)(apoDeviceCheckUntil - juce::Time::getMillisecondCounter()) > 0) setStandaloneAudioOpen(!apo.running());
     if (!apo.running()) return;
 
+    // The room, when one is on, runs in APO from recordings in APO's folder.
+    const auto scene = activeRoom();
+    if (scene != apoRoomTried) {
+        juce::String error;
+        apoRoomTried = scene;
+        apoRoomWritten.clear();
+        if (scene.isNotEmpty()) {
+            if (writeApoRoom(scene, error)) apoRoomWritten = scene;
+            else apoProblem = error;
+        }
+    }
+
     // A click (bypass, a filter switch, a new target) is written straight away.
     // While a knob is dragged, writes are spaced 200 ms apart so APO doesn't
     // reload its config many times a second; the final value always follows.
@@ -840,6 +861,40 @@ void BteqProcessor::updateApo() {
 // The same EQ the plugin applies, in Equalizer APO's own syntax: correction
 // (scaled by the correction amount), then My EQ, with one preamp for all of
 // it including the output trim.
+// Sample rates the room is recorded at for Equalizer APO, which needs a
+// response at the device's own rate.
+static constexpr int apoRoomRates[] = { 44100, 48000, 88200, 96000 };
+
+static juce::String apoRoomFile(const juce::String& scene, int rate, const char* path) {
+    return "BEQ room\\" + juce::File::createLegalFileName(scene) + " " + juce::String(rate) + " " + path + ".wav";
+}
+
+bool BteqProcessor::writeApoRoom(const juce::String& scene, juce::String& error) {
+    static const char* paths[] = { "LL", "LR", "RL", "RR" };
+    juce::WavAudioFormat wav;
+    for (int rate : apoRoomRates) {
+        juce::AudioBuffer<float> ir;
+        if (!DearVrRoom::responses(scene, rate, ir, error)) return false;
+        for (int c = 0; c < 4; ++c) {
+            const auto file = apo.folder().getChildFile(apoRoomFile(scene, rate, paths[c]).replace("\\", "/"));
+            file.getParentDirectory().createDirectory();
+            file.deleteFile();
+            std::unique_ptr<juce::OutputStream> out = file.createOutputStream();
+            auto writer = out != nullptr ? wav.createWriterFor(out, DearVrRoom::floatWav(rate, 1)) : nullptr;
+            if (writer == nullptr) {
+                error = "Could not write the room's files to " + file.getParentDirectory().getFullPathName() + ".";
+                return false;
+            }
+            const float* channel = ir.getReadPointer(c);
+            if (!writer->writeFromFloatArrays(&channel, 1, ir.getNumSamples())) {
+                error = "Could not write " + file.getFullPathName() + ".";
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 juce::String BteqProcessor::apoConfigText() const {
     const juce::ScopedLock sl(buildLock);
     std::vector<std::string> lines;
@@ -848,6 +903,25 @@ juce::String BteqProcessor::apoConfigText() const {
     if (p != nullptr)
         lines.push_back("# " + (headphoneName + " | " + juce::String(p->source) + (p->rig.empty() ? "" : " (" + juce::String(p->rig) + ")")
                                 + " | " + juce::String(p->target) + (match.active ? " | sounds like " + matchName : "")).toStdString());
+    // The room first, as in the plugin, and not affected by Bypass. Each input
+    // side is copied to a spare channel so both of its paths can be convolved,
+    // then the two paths into each ear are added together.
+    const auto scene = activeRoom();
+    if (scene.isNotEmpty() && scene == apoRoomWritten) {
+        lines.push_back(("# dearVR room: " + scene).toStdString());
+        lines.push_back("Copy: L=L R=R BEQLR=L BEQRL=R");
+        for (int rate : apoRoomRates) {
+            lines.push_back("If: sampleRate == " + std::to_string(rate));
+            const std::pair<const char*, const char*> paths[] = { { "L", "LL" }, { "BEQLR", "LR" }, { "BEQRL", "RL" }, { "R", "RR" } };
+            for (const auto& [channel, path] : paths) {
+                lines.push_back(std::string("Channel: ") + channel);
+                lines.push_back(("Convolution: " + apoRoomFile(scene, rate, path)).toStdString());
+            }
+            lines.push_back("EndIf:");
+        }
+        lines.push_back("Channel: all");
+        lines.push_back("Copy: L=L+BEQRL R=R+BEQLR");
+    }
     if (bypassParam->load() > 0.5f) {
         lines.push_back("# Bypassed");
         return juce::String(bteq::apo::joinLines(lines));
