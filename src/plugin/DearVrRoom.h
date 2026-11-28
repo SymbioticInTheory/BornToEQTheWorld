@@ -19,8 +19,14 @@ public:
     void process(juce::AudioBuffer<float>&);
     void updateTiming();
 
+    // Opens a separate dearVR MIX (the room in use is untouched) and lists every
+    // setting it exposes, with all the choices of each stepped one. For working
+    // out which setting picks the headphone model. Call on the message thread.
+    static juce::String describeParameters(juce::String& error);
+
 private:
     static juce::AudioProcessorParameter* findParameter(juce::AudioPluginInstance&, const juce::String& name);
+    static std::unique_ptr<juce::AudioPluginInstance> openInstance(double sampleRate, int block, juce::String& error);
     void prepareInstance();
 
     juce::AudioProcessor& owner;

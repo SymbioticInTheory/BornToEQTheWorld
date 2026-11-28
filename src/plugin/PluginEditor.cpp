@@ -1863,7 +1863,7 @@ void BteqEditor::refreshRoomButton() {
 
 // The dearVR room picker (the room button; also under right-click > dearVR room).
 void BteqEditor::showRoomMenu() {
-    static constexpr int kOff = 1, kFirst = 100;
+    static constexpr int kOff = 1, kList = 2, kFirst = 100;
     auto rooms = proc.roomScenes();
     if (rooms.isEmpty()) rooms.add("Mix Room A"); // its scenes are listed once it has loaded
     juce::PopupMenu menu;
@@ -1872,15 +1872,35 @@ void BteqEditor::showRoomMenu() {
     menu.addItem(kOff, "Off", true, active.isEmpty());
     if (proc.roomPausedForApo()) menu.addItem(0, "Turn off Equalizer APO to use room processing", false);
     for (int i = 0; i < rooms.size(); ++i) menu.addItem(kFirst + i, rooms[i], !proc.roomPausedForApo(), rooms[i] == active);
+    menu.addSeparator();
+    menu.addItem(kList, "Copy dearVR settings list");
     juce::Component::SafePointer<BteqEditor> safe(this);
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&roomButton), [safe, rooms](int id) {
         if (safe == nullptr || id <= 0) return;
+        if (id == kList) { safe->copyDearVrSettings(); return; }
         if (id != kOff && (id < kFirst || id >= kFirst + rooms.size())) return;
         const auto error = safe->proc.selectRoom(id == kOff ? juce::String() : rooms[id - kFirst]);
         safe->refreshRoomButton();
         if (error.isNotEmpty())
             juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "dearVR room", error, "OK", safe.getComponent());
     });
+}
+
+void BteqEditor::copyDearVrSettings() {
+    juce::String error;
+    const auto list = DearVrRoom::describeParameters(error);
+    if (list.isEmpty()) {
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "dearVR settings",
+                                               error.isNotEmpty() ? error : "dearVR MIX listed no settings.", "OK", this);
+        return;
+    }
+    juce::SystemClipboard::copyTextToClipboard(list);
+    const auto file = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("BEQ dearVR settings.txt");
+    const bool saved = file.replaceWithText(list);
+    juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon, "dearVR settings",
+        "The list of dearVR's settings is on the clipboard, ready to paste."
+            + (saved ? "\n\nIt is also saved as " + file.getFullPathName() : juce::String()),
+        "OK", this);
 }
 
 void BteqEditor::showScaleMenu(bool withSizes, juce::Component* target) {

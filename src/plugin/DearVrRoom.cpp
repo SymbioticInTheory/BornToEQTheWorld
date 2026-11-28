@@ -7,6 +7,58 @@ juce::AudioProcessorParameter* DearVrRoom::findParameter(juce::AudioPluginInstan
     return nullptr;
 }
 
+std::unique_ptr<juce::AudioPluginInstance> DearVrRoom::openInstance(double sampleRate, int block, juce::String& error) {
+    juce::VST3PluginFormat format;
+    juce::OwnedArray<juce::PluginDescription> types;
+    const auto locations = format.getDefaultLocationsToSearch();
+    for (int i = 0; i < locations.getNumPaths() && types.isEmpty(); ++i) {
+        const auto file = locations[i].getChildFile("dearVR MIX.vst3");
+        if (file.exists()) format.findAllTypesForFile(types, file.getFullPathName());
+    }
+    const juce::PluginDescription* type = nullptr;
+    for (const auto* candidate : types)
+        if (candidate->name.equalsIgnoreCase("dearVR MIX") && candidate->manufacturerName.equalsIgnoreCase("Dear Reality"))
+            type = candidate;
+    if (type == nullptr) { error = "An installed dearVR MIX VST3 was not found in the standard VST3 folders."; return nullptr; }
+
+    auto plugin = format.createInstanceFromDescription(*type, sampleRate, block, error);
+    if (plugin == nullptr) { if (error.isEmpty()) error = "Could not open dearVR MIX."; return nullptr; }
+    const auto stereo = juce::AudioChannelSet::stereo();
+    if (plugin->getMainBusNumInputChannels() != 2 || plugin->getMainBusNumOutputChannels() != 2
+        || plugin->getTotalNumInputChannels() != 2 || plugin->getTotalNumOutputChannels() != 2
+        || plugin->getChannelLayoutOfBus(true, 0) != stereo || plugin->getChannelLayoutOfBus(false, 0) != stereo) {
+        error = "This dearVR MIX instance did not open with one stereo input and output.";
+        return nullptr;
+    }
+    error = {};
+    return plugin;
+}
+
+juce::String DearVrRoom::describeParameters(juce::String& error) {
+    auto plugin = openInstance(48000.0, 512, error);
+    if (plugin == nullptr) return {};
+    juce::String out;
+    out << "dearVR MIX " << plugin->getPluginDescription().version << ", "
+        << plugin->getParameters().size() << " settings\n";
+    int index = 0;
+    for (auto* parameter : plugin->getParameters()) {
+        const float value = parameter->getValue();
+        const int steps = parameter->getNumSteps();
+        const bool listed = steps >= 2 && steps <= 200;
+        out << index++ << "\t" << parameter->getName(128) << "\t" << parameter->getLabel()
+            << "\tsteps " << (listed || parameter->isDiscrete() ? juce::String(steps) : juce::String("continuous"))
+            << "\tnow " << parameter->getText(value, 100) << " (" << juce::String(value, 4) << ")";
+        if (listed) {
+            juce::StringArray texts;
+            for (int i = 0; i < steps; ++i)
+                texts.add(parameter->getText(static_cast<float>(i) / static_cast<float>(steps - 1), 100));
+            out << "\tvalues " << texts.joinIntoString(" | ");
+        }
+        out << "\n";
+    }
+    return out;
+}
+
 juce::String DearVrRoom::select(const juce::String& scene) {
     if (scene.isEmpty()) {
         std::unique_ptr<juce::AudioPluginInstance> old;
@@ -29,19 +81,6 @@ juce::String DearVrRoom::select(const juce::String& scene) {
         return {};
     }
 
-    juce::VST3PluginFormat format;
-    juce::OwnedArray<juce::PluginDescription> types;
-    const auto locations = format.getDefaultLocationsToSearch();
-    for (int i = 0; i < locations.getNumPaths() && types.isEmpty(); ++i) {
-        const auto file = locations[i].getChildFile("dearVR MIX.vst3");
-        if (file.exists()) format.findAllTypesForFile(types, file.getFullPathName());
-    }
-    const juce::PluginDescription* type = nullptr;
-    for (const auto* candidate : types)
-        if (candidate->name.equalsIgnoreCase("dearVR MIX") && candidate->manufacturerName.equalsIgnoreCase("Dear Reality"))
-            type = candidate;
-    if (type == nullptr) return "An installed dearVR MIX VST3 was not found in the standard VST3 folders.";
-
     double initialRate;
     int initialBlock;
     {
@@ -50,13 +89,8 @@ juce::String DearVrRoom::select(const juce::String& scene) {
         initialBlock = blockSize > 0 ? blockSize : 512;
     }
     juce::String error;
-    auto plugin = format.createInstanceFromDescription(*type, initialRate, initialBlock, error);
-    if (plugin == nullptr) return error.isNotEmpty() ? error : "Could not open dearVR MIX.";
-    const auto stereo = juce::AudioChannelSet::stereo();
-    if (plugin->getMainBusNumInputChannels() != 2 || plugin->getMainBusNumOutputChannels() != 2
-        || plugin->getTotalNumInputChannels() != 2 || plugin->getTotalNumOutputChannels() != 2
-        || plugin->getChannelLayoutOfBus(true, 0) != stereo || plugin->getChannelLayoutOfBus(false, 0) != stereo)
-        return "This dearVR MIX instance did not open with one stereo input and output.";
+    auto plugin = openInstance(initialRate, initialBlock, error);
+    if (plugin == nullptr) return error;
 
     auto* headphoneCompensation = findParameter(*plugin, "HPC Enable");
     auto* sceneChoice = findParameter(*plugin, "Scenes");

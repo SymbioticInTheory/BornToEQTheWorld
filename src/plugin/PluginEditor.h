@@ -222,6 +222,7 @@ private:
     void mouseDown(const juce::MouseEvent&) override; // right-clicks anywhere in the window
     void showScaleMenu(bool withSizes = true, juce::Component* target = nullptr);
     void showRoomMenu();
+    void copyDearVrSettings();
     void refreshRoomButton();
     void showBackgroundMenu();
     void setUiScale(float scale);
