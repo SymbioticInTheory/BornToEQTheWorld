@@ -41,16 +41,22 @@ accent. **Forest** is the original.
 
 ## dearVR room monitoring
 
-Install dearVR MIX in a standard VST3 folder. In the plugin or standalone,
-right-click a blank part of the interface and choose **dearVR room → Mix Room A**.
-After dearVR loads, the menu lists its available scenes. Choose **Off** to
-unload it. The scene is saved with the session.
+Install dearVR MIX in a standard VST3 folder. Click **Room** in the correction
+box (or right-click > dearVR room) and pick a scene. Choose **Off** to turn the
+room off. The scene is saved with the session.
 
-BEQ runs the selected room on stereo input, then applies its own headphone
-correction. The hosted dearVR instance uses its default speaker, ambience,
-focus and head rotation settings with its headphone compensation switched off.
-The standalone needs stereo audio input with Equalizer APO mode off to use
-the room. Its Equalizer APO mode continues to apply BEQ's EQ system-wide.
+The first time a scene is used at a sample rate, BEQ records it from dearVR:
+four impulse responses (left to left, left to right, right to left, right to
+right) with dearVR's default speaker, ambience, focus and head settings and its
+headphone compensation off. The recordings are kept in BEQ's settings folder
+(`%APPDATA%\Born To EQ The World\dearVR rooms`), and from then on BEQ applies
+the room by convolution without loading dearVR. The room runs before the
+headphone correction and isn't affected by Bypass.
+
+With Equalizer APO on, the standalone writes the room to APO as well (files in
+`BEQ room` in APO's config folder, recorded at 44.1, 48, 88.2 and 96 kHz), so it
+works system-wide on a stereo device. **Room > Copy dearVR settings list** lists
+every setting dearVR exposes.
 
 ## Build and test
 
