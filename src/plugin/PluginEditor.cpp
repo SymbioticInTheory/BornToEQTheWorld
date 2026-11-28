@@ -2142,7 +2142,7 @@ void BteqEditor::showNewPresetMenu() {
     menu.addSectionHeader("New preset for " + proc.selectedHeadphone());
     menu.addItem(1, "Start flat (10 filters at 0 dB)");
     menu.addItem(2, canCopy ? "Copy the selected target's filters" : "Copy the selected target's filters (parametric only)", canCopy);
-    menu.addItem(3, "Import a ParametricEQ.txt file...");
+    menu.addItem(3, "Import a ParametricEQ.txt or Wavelet GraphicEQ file...");
     juce::Component::SafePointer<BteqEditor> safe(this);
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&targetList), [safe](int result) {
         if (safe == nullptr || result == 0) return;
@@ -2155,14 +2155,31 @@ void BteqEditor::showNewPresetMenu() {
             auto copy = safe->proc.effectiveParametric();
             safe->newPreset(copy, juce::String(safe->proc.selectedProfile()->target) + " (mine)");
         } else {
-            safe->fileChooser = std::make_unique<juce::FileChooser>("Import a parametric EQ (Equalizer APO / AutoEQ format)",
+            safe->fileChooser = std::make_unique<juce::FileChooser>("Import a parametric EQ (Equalizer APO / AutoEQ) or a Wavelet GraphicEQ",
                                                                     juce::File(), "*.txt");
             safe->fileChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                                            [safe](const juce::FileChooser& fc) {
                 if (safe == nullptr || fc.getResult() == juce::File()) return;
                 const auto file = fc.getResult();
+                const auto text = file.loadFileAsString().toStdString();
+                if (auto curve = bteq::parseGraphicEqText(text)) {
+                    // A Wavelet / AutoEQ GraphicEQ file: kept as a curve and played by the graphic EQ.
+                    // Equalizer APO's GraphicEQ export may carry a Preamp line; Wavelet's doesn't.
+                    auto gains = curve->gainsDb;
+                    if (auto pre = bteq::parseParametricText(text, nullptr))
+                        for (auto& g : gains) g += pre->preampDb;
+                    const auto freqs = curve->freqs;
+                    safe->askForName("Name your preset", file.getFileNameWithoutExtension(), [safe, freqs, gains](juce::String name) {
+                        if (safe == nullptr) return;
+                        safe->proc.addCustomGraphicPreset(name, freqs, gains);
+                        safe->refreshTargets();
+                        safe->refreshEditing();
+                        safe->content.repaint();
+                    });
+                    return;
+                }
                 std::vector<std::string> skipped;
-                auto parsed = bteq::parseParametricText(file.loadFileAsString().toStdString(), &skipped);
+                auto parsed = bteq::parseParametricText(text, &skipped);
                 if (!parsed || parsed->filters.empty()) {
                     juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Import",
                                                            "No filters were found in " + file.getFileName() + ".", "OK", safe.getComponent());
