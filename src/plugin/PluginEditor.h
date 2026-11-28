@@ -220,7 +220,9 @@ private:
     void paintContent(juce::Graphics&);
     void layoutContent();
     void mouseDown(const juce::MouseEvent&) override; // right-clicks anywhere in the window
-    void showScaleMenu(bool withSizes = true);
+    void showScaleMenu(bool withSizes = true, juce::Component* target = nullptr);
+    void showRoomMenu();
+    void refreshRoomButton();
     void showBackgroundMenu();
     void setUiScale(float scale);
     // Background: the forest, or your own image (stored next to settings.xml) with colours picked from it.
@@ -312,6 +314,7 @@ private:
     juce::TextButton collapseButton { juce::String::fromUTF8("\xc2\xab") }, expandButton { "Show" }; // the left side
     juce::TextButton savedButton;
     juce::TextButton backgroundButton { "Background" };
+    juce::TextButton roomButton, moreButton { juce::String::fromUTF8("More \xe2\x96\xbe") }; // in the correction box
     juce::TextButton apoButton; // standalone only: send the EQ to Equalizer APO
     juce::String shownApoError;
     juce::String loadedSavedName;      // the saved profile shown on the dropdown

@@ -1301,6 +1301,15 @@ BteqEditor::BteqEditor(BteqProcessor& p)
     backgroundButton.setTooltip("Pick a background. BEQ takes its colours from it and adds them as the last dot");
     backgroundButton.onClick = [this] { showBackgroundMenu(); };
     content.addAndMakeVisible(backgroundButton);
+    roomButton.getProperties().set("kind", "small");
+    roomButton.setTooltip("dearVR room: run your installed dearVR MIX before BEQ's correction (its headphone compensation off)");
+    roomButton.onClick = [this] { showRoomMenu(); };
+    content.addAndMakeVisible(roomButton);
+    moreButton.getProperties().set("kind", "small");
+    moreButton.setTooltip("Window size, low memory mode, background and dearVR room (also on a right-click anywhere)");
+    moreButton.onClick = [this] { showScaleMenu(true, &moreButton); };
+    content.addAndMakeVisible(moreButton);
+    refreshRoomButton();
 
     preampValue.setFont(theme->labelFont(16.0f));
     preampValue.setColour(juce::Label::textColourId, Theme::text);
@@ -1468,6 +1477,7 @@ void BteqEditor::timerCallback() {
     parametricTab.setToggleState(!graphic, juce::dontSendNotification);
     graphicTab.setToggleState(graphic, juce::dontSendNotification);
     bypassButton.setButtonText(bypassButton.getToggleState() ? "Bypassed" : "Bypass");
+    refreshRoomButton(); // a session can bring a room back after the window opened
     if (proc.standaloneUi) {
         apoButton.setToggleState(proc.apoOutput(), juce::dontSendNotification);
         const auto apoText = proc.apoOutput() ? juce::String::fromUTF8("Equalizer APO \xc2\xb7 on") : "Equalizer APO";
@@ -1686,6 +1696,12 @@ void BteqEditor::layoutContent() {
         swatches[(size_t)i].setBounds(rColour.getX() + 10 + i * (dot + dotGap), rColour.getCentreY() - dot / 2, dot, dot);
     juce::ignoreUnused(dotsW);
     backgroundButton.setBounds(rColour.getRight() - 8 - 86, rColour.getCentreY() - 11, 86, 22);
+    {   // bottom row of the correction box
+        auto row = juce::Rectangle<int>(rCorrection.getX() + 14, rCorrection.getY() + 130, rCorrection.getWidth() - 28, 22);
+        moreButton.setBounds(row.removeFromRight(76));
+        row.removeFromRight(8);
+        roomButton.setBounds(row);
+    }
 }
 
 void BteqEditor::toggleCollapse(int what) {
@@ -1838,7 +1854,36 @@ void BteqEditor::mouseDown(const juce::MouseEvent& e) {
 // The background button: the same background choices as the right-click menu.
 void BteqEditor::showBackgroundMenu() { showScaleMenu(false); }
 
-void BteqEditor::showScaleMenu(bool withSizes) {
+void BteqEditor::refreshRoomButton() {
+    const auto room = proc.activeRoom();
+    const auto text = room.isEmpty() ? juce::String("Room: off") : "Room: " + room;
+    if (roomButton.getButtonText() != text) roomButton.setButtonText(text);
+    roomButton.setToggleState(room.isNotEmpty(), juce::dontSendNotification);
+}
+
+// The dearVR room picker (the room button; also under right-click > dearVR room).
+void BteqEditor::showRoomMenu() {
+    static constexpr int kOff = 1, kFirst = 100;
+    auto rooms = proc.roomScenes();
+    if (rooms.isEmpty()) rooms.add("Mix Room A"); // its scenes are listed once it has loaded
+    juce::PopupMenu menu;
+    const auto active = proc.activeRoom();
+    menu.addSectionHeader("dearVR room");
+    menu.addItem(kOff, "Off", true, active.isEmpty());
+    if (proc.roomPausedForApo()) menu.addItem(0, "Turn off Equalizer APO to use room processing", false);
+    for (int i = 0; i < rooms.size(); ++i) menu.addItem(kFirst + i, rooms[i], !proc.roomPausedForApo(), rooms[i] == active);
+    juce::Component::SafePointer<BteqEditor> safe(this);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&roomButton), [safe, rooms](int id) {
+        if (safe == nullptr || id <= 0) return;
+        if (id != kOff && (id < kFirst || id >= kFirst + rooms.size())) return;
+        const auto error = safe->proc.selectRoom(id == kOff ? juce::String() : rooms[id - kFirst]);
+        safe->refreshRoomButton();
+        if (error.isNotEmpty())
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "dearVR room", error, "OK", safe.getComponent());
+    });
+}
+
+void BteqEditor::showScaleMenu(bool withSizes, juce::Component* target) {
     juce::PopupMenu menu;
     if (withSizes) {
         menu.addSectionHeader("Window size");
@@ -1875,10 +1920,12 @@ void BteqEditor::showScaleMenu(bool withSizes) {
     juce::Component::SafePointer<BteqEditor> safe(this);
     auto options = juce::PopupMenu::Options();
     if (!withSizes) options = options.withTargetComponent(&backgroundButton);
+    else if (target != nullptr) options = options.withTargetComponent(target);
     menu.showMenuAsync(options, [safe, rooms](int id) {
         if (safe == nullptr || id <= 0) return;
         if (id == kRoomOff || (id >= kRoomFirst && id < kRoomFirst + rooms.size())) {
             const auto error = safe->proc.selectRoom(id == kRoomOff ? juce::String() : rooms[id - kRoomFirst]);
+            safe->refreshRoomButton();
             if (error.isNotEmpty())
                 juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "dearVR room",
                                                        error, "OK", safe.getComponent());
